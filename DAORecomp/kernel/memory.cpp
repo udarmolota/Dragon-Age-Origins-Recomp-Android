@@ -3,6 +3,10 @@
 #include "types.h"
 #include "gpu/xenia_host.h"
 
+#ifndef _WIN32
+#include <sys/mman.h>
+#endif
+
 namespace dao::kernel
 {
     GuestMemory g_memory;
@@ -15,6 +19,79 @@ namespace dao::kernel
     constexpr uint32_t kKernelHeapBase = 0x80100000;
     constexpr uint32_t kKernelHeapEnd = 0x82000000;
 
+#ifndef _WIN32
+    // POSIX: one 4 GB reservation backed on touch, and the 512 MB physical bank as a
+    // shared memory object mapped at its three windows. The 0xE0000000 window starts
+    // one 4 KB page into the bank, which mmap can only do with 4 KB host pages.
+    bool GuestMemory::Init()
+    {
+        const long pageSize = sysconf(_SC_PAGESIZE);
+        void* reservation = mmap(nullptr, PPC_MEMORY_SIZE, PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+        if (reservation == MAP_FAILED)
+        {
+            LOGE("Failed to reserve the 4 GB guest address space ({})", errno);
+            return false;
+        }
+        uint8_t* p = static_cast<uint8_t*>(reservation);
+
+        int bank = int(syscall(SYS_memfd_create, "dao-physical", 0));
+        if (bank < 0)
+        {
+            // A seccomp policy may refuse memfd_create: an unlinked file does the same job.
+            char path[] = "/data/local/tmp/dao-physical-XXXXXX";
+            bank = mkstemp(path);
+            if (bank >= 0)
+                unlink(path);
+        }
+        if (bank < 0 || ftruncate(bank, off_t(kPhysicalSize)) != 0)
+        {
+            LOGE("Failed to create the 512 MB physical memory bank ({})", errno);
+            return false;
+        }
+        for (uint64_t view : { 0xA0000000ull, 0xC0000000ull, 0xE0000000ull })
+        {
+            const uint64_t offset = view == 0xE0000000ull ? 0x1000 : 0;
+            if (offset && uint64_t(pageSize) > offset)
+            {
+                LOGE("Host pages are {} bytes: the 0xE0000000 view (bank offset 0x1000) can't be mapped", pageSize);
+                return false;
+            }
+            if (mmap(p + view, kPhysicalSize - offset, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED | MAP_NORESERVE,
+                    bank, off_t(offset)) == MAP_FAILED)
+            {
+                LOGE("Failed to map physical view at {:X} ({})", view, errno);
+                return false;
+            }
+        }
+        close(bank);
+
+        base = p;
+
+        // Null page stays inaccessible so guest null dereferences fault loudly.
+        mprotect(base, 0x10000, PROT_NONE);
+
+        s_heap4K.Init("v00000000", 0x00000000, 0x40000000, 0x1000, 0x00000000);
+        s_heap4K.AllocFixed(0, 0x10000, false, X_PAGE_NOACCESS);
+        s_heap64K.Init("v40000000", 0x40000000, 0x3F000000, 0x10000, 0x40000000);
+        s_physical.Init("physical", 0x00000000, uint32_t(kPhysicalSize), 0x1000, 0xA0000000);
+        s_physical.AllocFixed(0x1FFF0000, 0x10000, false, X_PAGE_NOACCESS);
+
+        size_t count = 0;
+        const PPCFuncMapping* mappings = g_build.info.mappings;
+        for (size_t i = 0; mappings[i].guest != 0; i++)
+        {
+            if (mappings[i].host != nullptr)
+            {
+                InsertFunction(uint32_t(mappings[i].guest), mappings[i].host);
+                count++;
+            }
+        }
+
+        LOGI("Guest memory at {}, {} recompiled functions mapped ({} byte host pages)", (void*)base, count, pageSize);
+        return true;
+    }
+#else
     bool GuestMemory::Init()
     {
         // Reserve 4 GB as a placeholder so the physical views can be mapped into it.
@@ -108,6 +185,7 @@ namespace dao::kernel
         LOGI("Guest memory at {}, {} recompiled functions mapped", (void*)base, count);
         return true;
     }
+#endif
 
     // ---------------------------------------------------------------- PageHeap
 

@@ -1,12 +1,15 @@
 #include "stdafx.h"
 #include "program.h"
 
+#ifdef _WIN32
 #include <tlhelp32.h>
+#endif
 
 namespace fs = std::filesystem;
 
 namespace dao
 {
+#ifdef _WIN32
     fs::path ProgramPath()
     {
         std::wstring path(MAX_PATH, L'\0');
@@ -23,6 +26,14 @@ namespace dao
             path.resize(path.size() * 2);
         }
     }
+#else
+    fs::path ProgramPath()
+    {
+        std::error_code ec;
+        const fs::path self = fs::read_symlink("/proc/self/exe", ec);
+        return ec ? fs::path() : self;
+    }
+#endif
 
     std::wstring QuoteArgument(const fs::path& path)
     {
@@ -32,6 +43,7 @@ namespace dao
         return L"\"" + text + L"\"";
     }
 
+#ifdef _WIN32
     bool OtherInstanceRunning()
     {
         const fs::path self = ProgramPath();
@@ -79,6 +91,12 @@ namespace dao
         const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
         return ntdll && GetProcAddress(ntdll, "wine_get_version");
     }
+#else
+    // One process per install is the app's business on Android (the game runs in its
+    // own process there); nothing to look for here.
+    bool OtherInstanceRunning() { return false; }
+    bool IsUnderWine() { return false; }
+#endif
 
     bool IsInstalledGame(const fs::path& installRoot)
     {
@@ -88,6 +106,7 @@ namespace dao
             fs::is_regular_file(game / "dao-extracted.txt", ec);
     }
 
+#ifdef _WIN32
     bool StartProgram(const fs::path& program, std::wstring_view arguments, DWORD flags, const fs::path& folder)
     {
         std::wstring command = QuoteArgument(program) + L" " + std::wstring(arguments);
@@ -100,4 +119,8 @@ namespace dao
         CloseHandle(process.hProcess);
         return true;
     }
+#else
+    // Starting other programs (the installer, the updater) is the Windows launcher's.
+    bool StartProgram(const fs::path&, std::wstring_view, DWORD, const fs::path&) { return false; }
+#endif
 }

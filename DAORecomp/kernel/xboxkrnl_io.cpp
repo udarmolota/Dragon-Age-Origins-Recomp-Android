@@ -5,6 +5,7 @@
 #include "gpu/xenia_host.h"
 #include "text.h"
 #include "function.h"
+#include "host_file.h"
 #include "thread.h"
 #include "vfs.h"
 #include "patches/patches.h"
@@ -83,6 +84,7 @@ namespace dao::imp
 
     static bool QueryHost(const fs::path& path, HostInfo& info)
     {
+#ifdef _WIN32
         WIN32_FILE_ATTRIBUTE_DATA data;
         if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data))
             return false;
@@ -91,6 +93,20 @@ namespace dao::imp
         info.write = FileTimeValue(data.ftLastWriteTime);
         info.size = (uint64_t(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
         info.attributes = HostAttributes(data.dwFileAttributes);
+#else
+        struct stat st{};
+        if (stat(path.c_str(), &st) != 0)
+            return false;
+        const auto fileTime = [](const timespec& ts) {
+            return uint64_t(ts.tv_sec) * 10000000ull + uint64_t(ts.tv_nsec) / 100 + 116444736000000000ull;
+        };
+        info.creation = fileTime(st.st_ctim);
+        info.access = fileTime(st.st_atim);
+        info.write = fileTime(st.st_mtim);
+        info.size = uint64_t(st.st_size);
+        info.attributes = HostAttributes((S_ISDIR(st.st_mode) ? X_FILE_ATTRIBUTE_DIRECTORY : 0) |
+            ((st.st_mode & S_IWUSR) ? 0 : X_FILE_ATTRIBUTE_READONLY));
+#endif
         if (VfsIsReadOnly(path))
             info.attributes |= X_FILE_ATTRIBUTE_READONLY;
         if (info.attributes & X_FILE_ATTRIBUTE_DIRECTORY)
@@ -170,15 +186,15 @@ namespace dao::imp
         }
         else
         {
-            DWORD creation = OPEN_EXISTING;
+            hostfile::Creation creation = hostfile::Creation::Open;
             switch (disposition)
             {
-            case Disposition::Supersede: creation = CREATE_ALWAYS; action = exists ? Action::Superseded : Action::Created; break;
-            case Disposition::Open: creation = OPEN_EXISTING; action = Action::Opened; break;
-            case Disposition::Create: creation = CREATE_NEW; action = Action::Created; break;
-            case Disposition::OpenIf: creation = OPEN_ALWAYS; action = exists ? Action::Opened : Action::Created; break;
-            case Disposition::Overwrite: creation = TRUNCATE_EXISTING; action = Action::Overwritten; break;
-            case Disposition::OverwriteIf: creation = CREATE_ALWAYS; action = exists ? Action::Overwritten : Action::Created; break;
+            case Disposition::Supersede: creation = hostfile::Creation::Supersede; action = exists ? Action::Superseded : Action::Created; break;
+            case Disposition::Open: creation = hostfile::Creation::Open; action = Action::Opened; break;
+            case Disposition::Create: creation = hostfile::Creation::Create; action = Action::Created; break;
+            case Disposition::OpenIf: creation = hostfile::Creation::OpenIf; action = exists ? Action::Opened : Action::Created; break;
+            case Disposition::Overwrite: creation = hostfile::Creation::Overwrite; action = Action::Overwritten; break;
+            case Disposition::OverwriteIf: creation = hostfile::Creation::OverwriteIf; action = exists ? Action::Overwritten : Action::Created; break;
             default: return fail(X_STATUS_INVALID_PARAMETER, 0);
             }
 
@@ -186,14 +202,13 @@ namespace dao::imp
             if (write && !exists)
                 fs::create_directories(hostPath->parent_path(), ec);
 
-            file->host = CreateFileW(hostPath->c_str(), GENERIC_READ | (write ? GENERIC_WRITE : 0),
-                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, creation, FILE_ATTRIBUTE_NORMAL, nullptr);
+            uint32_t error = 0;
+            file->host = hostfile::Open(*hostPath, write, creation, error);
             if (file->host == INVALID_HANDLE_VALUE)
             {
-                const DWORD error = GetLastError();
                 LOGW("NtCreateFile: host open of '{}' failed ({})", dao::Utf8(*hostPath), error);
-                return fail(error == ERROR_ACCESS_DENIED || error == ERROR_SHARING_VIOLATION ? X_STATUS_ACCESS_DENIED
-                    : X_STATUS_OBJECT_NAME_NOT_FOUND, Action::DoesNotExist);
+                return fail(hostfile::IsAccessDenied(error) ? X_STATUS_ACCESS_DENIED : X_STATUS_OBJECT_NAME_NOT_FOUND,
+                    Action::DoesNotExist);
             }
         }
 
@@ -241,17 +256,10 @@ namespace dao::imp
             offset = file.position;
 
         // Reads `want` bytes at `at` into host memory; end of file isn't an error.
-        auto readHost = [&](uint8_t* to, uint32_t want, uint64_t at, DWORD& got) {
-            OVERLAPPED ov{};
-            ov.Offset = DWORD(at);
-            ov.OffsetHigh = DWORD(at >> 32);
-            got = 0;
-            if (ReadFile(file.host, to, want, &got, &ov))
-                return DWORD(ERROR_SUCCESS);
-            const DWORD error = GetLastError();
-            return error == ERROR_HANDLE_EOF ? DWORD(ERROR_SUCCESS) : error;
+        auto readHost = [&](uint8_t* to, uint32_t want, uint64_t at, uint32_t& got) {
+            return DWORD(hostfile::Read(file.host, to, want, at, got));
         };
-        DWORD read = 0;
+        uint32_t read = 0;
         DWORD error = ERROR_SUCCESS;
         const uint32_t guest = g_memory.ToGuest(buffer);
         if (IsPhysicalAddress(guest) && length)
@@ -275,7 +283,7 @@ namespace dao::imp
             while (read < length)
             {
                 const uint32_t want = std::min<uint32_t>(kChunk, length - read);
-                DWORD got;
+                uint32_t got;
                 error = readHost(bounce.get(), want, offset + read, got);
                 if (error != ERROR_SUCCESS)
                     break;
@@ -356,16 +364,13 @@ namespace dao::imp
         if (!file || file->isDirectory)
             return X_STATUS_INVALID_HANDLE;
 
-        DWORD written = 0;
+        uint32_t written = 0;
         {
             std::lock_guard lock(file->mutex);
             uint64_t offset = offsetPtr ? uint64_t(*offsetPtr) : kUseFilePointer;
             if (offset == kUseFilePointer || offset == ~0ull)
                 offset = file->position;
-            OVERLAPPED ov{};
-            ov.Offset = DWORD(offset);
-            ov.OffsetHigh = DWORD(offset >> 32);
-            if (!WriteFile(file->host, buffer, length, &written, &ov))
+            if (!hostfile::Write(file->host, buffer, length, offset, written))
             {
                 LOGW("WriteFile '{}' failed ({})", file->guestPath, GetLastError());
                 SetIosb(iosb, X_STATUS_ACCESS_DENIED, 0);
@@ -382,7 +387,7 @@ namespace dao::imp
         if (!file)
             return X_STATUS_INVALID_HANDLE;
         if (file->host != INVALID_HANDLE_VALUE)
-            FlushFileBuffers(file->host);
+            hostfile::Flush(file->host);
         SetIosb(iosb, X_STATUS_SUCCESS, 0);
         return X_STATUS_SUCCESS;
     }
@@ -486,7 +491,7 @@ namespace dao::imp
             break;
         case XFileInternalInformation:
             if (!need(8)) { status = X_STATUS_BUFFER_TOO_SMALL; break; }
-            *reinterpret_cast<u64*>(info) = std::hash<std::wstring>{}(file->hostPath.native());
+            *reinterpret_cast<u64*>(info) = std::hash<fs::path::string_type>{}(file->hostPath.native());
             break;
         case XFilePositionInformation:
             if (!need(8)) { status = X_STATUS_BUFFER_TOO_SMALL; break; }
@@ -499,7 +504,7 @@ namespace dao::imp
             break;
         case XFileSectorInformation:
             if (!need(4)) { status = X_STATUS_BUFFER_TOO_SMALL; break; }
-            *reinterpret_cast<u32*>(info) = uint32_t(std::hash<std::wstring>{}(file->hostPath.native()));
+            *reinterpret_cast<u32*>(info) = uint32_t(std::hash<fs::path::string_type>{}(file->hostPath.native()));
             break;
         case XFileNetworkOpenInformation:
             if (!need(56)) { status = X_STATUS_BUFFER_TOO_SMALL; break; }
@@ -536,10 +541,7 @@ namespace dao::imp
         case XFileEndOfFileInformation:
         {
             const uint64_t size = *reinterpret_cast<u64*>(info);
-            FILE_END_OF_FILE_INFO eof{};
-            eof.EndOfFile.QuadPart = int64_t(size);
-            if (file->host == INVALID_HANDLE_VALUE ||
-                !SetFileInformationByHandle(file->host, FileEndOfFileInfo, &eof, sizeof(eof)))
+            if (file->host == INVALID_HANDLE_VALUE || !hostfile::SetSize(file->host, size))
                 status = X_STATUS_ACCESS_DENIED;
             written = 8;
             break;
@@ -578,7 +580,7 @@ namespace dao::imp
             std::lock_guard lock(file->mutex);
             if (file->host != INVALID_HANDLE_VALUE)
             {
-                ::CloseHandle(file->host);
+                hostfile::Close(file->host);
                 file->host = INVALID_HANDLE_VALUE;
             }
             fs::rename(file->hostPath, *target, ec);
@@ -587,8 +589,10 @@ namespace dao::imp
             else
                 file->hostPath = *target;
             if (!file->isDirectory)
-                file->host = CreateFileW(file->hostPath.c_str(), GENERIC_READ | GENERIC_WRITE,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+            {
+                uint32_t error = 0;
+                file->host = hostfile::Open(file->hostPath, true, hostfile::Creation::Open, error);
+            }
             break;
         }
         default:

@@ -312,12 +312,37 @@ namespace dao::input
             SDL_SetGamepadLED(pad, 140, 0, 0);
         }
 
+#ifdef __ANDROID__
+        // The app's UI thread pumps SDL's events (only one thread may) and opens the
+        // gamepad (OnSdlEvent); the input thread reads it.
+        std::mutex s_padMutex;
+        SDL_Gamepad* s_pad = nullptr;
+
+        // The app's on-screen pad (SetVirtualPad), read by the input thread.
+        struct VirtualPadState
+        {
+            uint16_t buttons = 0;
+            int16_t thumbLX = 0, thumbLY = 0, thumbRX = 0, thumbRY = 0;
+            uint8_t leftTrigger = 0, rightTrigger = 0;
+        };
+        std::mutex s_virtualMutex;
+        VirtualPadState s_virtual;
+
+        // The larger deflection of a physical and the on-screen axis.
+        int16_t MergeAxis(int16_t physical, int16_t virtualAxis)
+        {
+            return std::abs(int(virtualAxis)) > std::abs(int(physical)) ? virtualAxis : physical;
+        }
+#endif
+
         void InputThread()
         {
             SetThreadDescription(GetCurrentThread(), L"Input");
+#ifndef __ANDROID__
             SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
             if (!SDL_Init(SDL_INIT_GAMEPAD | SDL_INIT_HAPTIC))
                 LOGE("SDL_Init failed: {}; only keyboard input is available", SDL_GetError());
+#endif
 
             SDL_Gamepad* pad = nullptr;
             uint32_t appliedRumble = 0;
@@ -330,6 +355,14 @@ namespace dao::input
             {
                 std::this_thread::sleep_until(next);
 
+#ifdef __ANDROID__
+                {
+                    std::lock_guard lock(s_padMutex);
+                    if (pad != s_pad)
+                        appliedRumble = 0;
+                    pad = s_pad;
+                }
+#else
                 SDL_Event event;
                 while (SDL_PollEvent(&event))
                 {
@@ -356,10 +389,27 @@ namespace dao::input
                         }
                     }
                 }
+#endif
 
                 PadState state = pad ? ReadGamepad(pad) : PadState{};
                 const double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - s_start).count();
                 MergeDigital(state, KeyboardButtons() | ScriptButtons(now));
+#ifdef __ANDROID__
+                {
+                    VirtualPadState virtualPad;
+                    {
+                        std::lock_guard lock(s_virtualMutex);
+                        virtualPad = s_virtual;
+                    }
+                    MergeDigital(state, virtualPad.buttons);
+                    state.thumbLX = MergeAxis(state.thumbLX, virtualPad.thumbLX);
+                    state.thumbLY = MergeAxis(state.thumbLY, virtualPad.thumbLY);
+                    state.thumbRX = MergeAxis(state.thumbRX, virtualPad.thumbRX);
+                    state.thumbRY = MergeAxis(state.thumbRY, virtualPad.thumbRY);
+                    state.leftTrigger = std::max(state.leftTrigger, virtualPad.leftTrigger);
+                    state.rightTrigger = std::max(state.rightTrigger, virtualPad.rightTrigger);
+                }
+#endif
                 if (auto* handler = s_thumbComboHandler.load(std::memory_order_relaxed))
                 {
                     const uint16_t thumbs = thumbCombo.Filter(state.buttons, std::chrono::steady_clock::now(), handler);
@@ -367,7 +417,11 @@ namespace dao::input
                 }
                 state.packetNumber = previous.packetNumber;
                 if (memcmp(&state, &previous, sizeof(state)) != 0)
+                {
                     state.packetNumber = ++packet;
+                    LOGT("Input state #{}: buttons {:04X} LT {} RT {} L ({}, {}) R ({}, {})", packet, state.buttons,
+                        state.leftTrigger, state.rightTrigger, state.thumbLX, state.thumbLY, state.thumbRX, state.thumbRY);
+                }
                 previous = state;
                 {
                     std::lock_guard lock(s_mutex);
@@ -386,6 +440,48 @@ namespace dao::input
             }
         }
     }
+
+#ifdef __ANDROID__
+    void SetVirtualPad(uint16_t buttons, float leftX, float leftY, float rightX, float rightY, float leftTrigger,
+        float rightTrigger)
+    {
+        const auto axis = [](float value) { return ClampAxis(int(std::lround(std::clamp(value, -1.0f, 1.0f) * 32767.0f))); };
+        const auto trigger = [](float value) { return uint8_t(std::lround(std::clamp(value, 0.0f, 1.0f) * 255.0f)); };
+        std::lock_guard lock(s_virtualMutex);
+        s_virtual.buttons = buttons;
+        s_virtual.thumbLX = axis(leftX);
+        s_virtual.thumbLY = axis(leftY);
+        s_virtual.thumbRX = axis(rightX);
+        s_virtual.thumbRY = axis(rightY);
+        s_virtual.leftTrigger = trigger(leftTrigger);
+        s_virtual.rightTrigger = trigger(rightTrigger);
+    }
+
+    void OnSdlEvent(const SDL_Event& event)
+    {
+        std::lock_guard lock(s_padMutex);
+        if (event.type == SDL_EVENT_GAMEPAD_ADDED && !s_pad)
+        {
+            s_pad = SDL_OpenGamepad(event.gdevice.which);
+            if (s_pad)
+                OnGamepadOpened(s_pad);
+        }
+        else if (event.type == SDL_EVENT_GAMEPAD_REMOVED && s_pad && event.gdevice.which == SDL_GetGamepadID(s_pad))
+        {
+            LOGI("Gamepad disconnected");
+            SDL_CloseGamepad(s_pad);
+            s_pad = nullptr;
+            // Fall back to another connected pad.
+            int count = 0;
+            if (SDL_JoystickID* ids = SDL_GetGamepads(&count))
+            {
+                if (count > 0 && (s_pad = SDL_OpenGamepad(ids[0])))
+                    OnGamepadOpened(s_pad);
+                SDL_free(ids);
+            }
+        }
+    }
+#endif
 
     void Initialize()
     {

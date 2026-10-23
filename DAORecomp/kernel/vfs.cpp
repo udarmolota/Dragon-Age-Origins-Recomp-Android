@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "vfs.h"
 
+#include "host_file.h"
 #include "text.h"
 
 namespace dao::kernel
@@ -238,12 +239,61 @@ namespace dao::kernel
         }
     }
 
+#ifndef _WIN32
+    // The console's paths are case-insensitive with '\' separators; a POSIX file system is
+    // neither. The separators are swapped, and when the spelled path doesn't exist, each
+    // component is looked up in its directory ignoring case (listings cached per directory).
+    static fs::path CaseInsensitive(const fs::path& wanted)
+    {
+        static std::unordered_map<std::string, std::unordered_map<std::string, std::string>> s_listings;
+        std::error_code ec;
+        if (fs::exists(wanted, ec))
+            return wanted;
+        fs::path result;
+        bool first = true;
+        for (const fs::path& part : wanted)
+        {
+            if (first)
+            {
+                result = part;  // "/" root
+                first = false;
+                continue;
+            }
+            const fs::path candidate = result / part;
+            if (fs::exists(candidate, ec))
+            {
+                result = candidate;
+                continue;
+            }
+            auto& listing = s_listings[result.native()];
+            if (listing.empty())
+                for (const auto& entry : fs::directory_iterator(result, ec))
+                    listing.emplace(Lower(entry.path().filename().native()), entry.path().filename().native());
+            const auto it = listing.find(Lower(part.native()));
+            if (it == listing.end())
+                return wanted;  // not there under any spelling: the caller sees "doesn't exist"
+            result /= it->second;
+        }
+        return result;
+    }
+#endif
+
     static fs::path Join(const fs::path& root, const std::string& rest)
     {
         fs::path host = root;
+#ifdef _WIN32
         if (!rest.empty())
             host /= fs::path(rest);
         return host.lexically_normal();
+#else
+        std::string posix = rest;
+        std::replace(posix.begin(), posix.end(), '\\', '/');
+        while (!posix.empty() && posix.front() == '/')
+            posix.erase(0, 1);
+        if (!posix.empty())
+            host /= fs::path(posix);
+        return CaseInsensitive(host.lexically_normal());
+#endif
     }
 
     std::optional<fs::path> VfsResolve(std::string_view guestPath)
@@ -349,7 +399,7 @@ namespace dao::kernel
     File::~File()
     {
         if (host != INVALID_HANDLE_VALUE)
-            ::CloseHandle(host);
+            hostfile::Close(host);
         if (deleteOnClose)
         {
             std::error_code ec;

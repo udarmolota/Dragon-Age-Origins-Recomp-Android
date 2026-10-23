@@ -311,13 +311,17 @@ namespace dao::imp
         // Written next to it and swapped in, so a crash mid-write keeps the old value
         // (not with WriteFileAtomically: this one is written through to the disk).
         const fs::path path = ProfileDir() / fmt::format("{:08X}.bin", id);
-        const fs::path temp = fs::path(path).concat(L".tmp");
+        const fs::path temp = fs::path(path).concat(".tmp");
         FILE* f = _wfopen(temp.c_str(), L"wb");
         if (!f)
             return;
         const bool written = fwrite(data.data(), 1, data.size(), f) == data.size();
-        if (fclose(f) != 0 || !written ||
-            !MoveFileExW(temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+#ifdef _WIN32
+        const auto moved = [&] { return MoveFileExW(temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0; };
+#else
+        const auto moved = [&] { return rename(temp.c_str(), path.c_str()) == 0; };
+#endif
+        if (fclose(f) != 0 || !written || !moved())
         {
             LOGW("Profile setting {:08X}: can't save it", id);
             fs::remove(temp, ec);

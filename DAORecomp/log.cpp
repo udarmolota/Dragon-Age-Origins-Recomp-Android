@@ -7,17 +7,27 @@ namespace dao::log
 {
     static std::mutex s_mutex;
     static FILE* s_file;
-    static bool s_trace = getenv("DAO_TRACE") != nullptr;
+    static std::atomic<bool> s_trace = getenv("DAO_TRACE") != nullptr;
     static const auto s_start = std::chrono::steady_clock::now();
 
     void Init(const std::filesystem::path& path)
     {
         s_file = _wfopen(path.c_str(), L"w");
+        // DAO_TRACE_AFTER=<seconds>: import tracing from that moment on (a whole run's trace
+        // is too much on a phone, and shifts the timing it is meant to show).
+        if (const char* after = getenv("DAO_TRACE_AFTER"))
+        {
+            const int seconds = std::max(1, atoi(after));
+            std::thread([seconds] {
+                std::this_thread::sleep_for(std::chrono::seconds(seconds));
+                s_trace.store(true, std::memory_order_relaxed);
+            }).detach();
+        }
     }
 
     bool TraceEnabled()
     {
-        return s_trace;
+        return s_trace.load(std::memory_order_relaxed);
     }
 
     void Write(Level level, std::string_view message)

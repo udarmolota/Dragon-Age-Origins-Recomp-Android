@@ -4,6 +4,13 @@
 #include "text.h"
 #include "memory.h"
 
+#ifndef _WIN32
+#include <link.h>
+#include <semaphore.h>
+#include <time.h>
+#include <unwind.h>
+#endif
+
 namespace dao::kernel
 {
     uint32_t g_processBlock;
@@ -40,8 +47,13 @@ namespace dao::kernel
             context->~PPCContext();
             _aligned_free(context);
         }
+#ifdef _WIN32
         if (hostHandle)
             ::CloseHandle(hostHandle);
+#else
+        if (hostHandle)
+            pthread_detach(reinterpret_cast<pthread_t>(hostHandle));
+#endif
         // kthread is guestObject (freed by ~KernelObject).
     }
 
@@ -178,6 +190,11 @@ namespace dao::kernel
     // Fills `offsets` with up to `count` return addresses from `context`; returns
     // how many. No C++ objects here: the unwinding is guarded with SEH (a
     // corrupted stack can fault).
+#ifndef _WIN32
+    // No host stack walking yet on POSIX (the tombstone has the crash's; samples
+    // would need a signal-based unwinder).
+    static int UnwindOffsets(CONTEXT&, uint64_t*, int) { return 0; }
+#else
     static int UnwindOffsets(CONTEXT& context, uint64_t* offsets, int count)
     {
         const auto exeBase = reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr));
@@ -202,6 +219,7 @@ namespace dao::kernel
         }
         return n;
     }
+#endif
 
     static constexpr int kMaxStackDepth = 64;
 
@@ -219,6 +237,87 @@ namespace dao::kernel
         return FormatOffsets(offsets, UnwindOffsets(context, offsets, std::min(count, kMaxStackDepth)));
     }
 
+#ifndef _WIN32
+    // POSIX: the thread is interrupted with a signal and walks its own stack with the
+    // unwinder; offsets are from the executable's load address, for llvm-symbolizer against
+    // the unstripped file.
+    namespace
+    {
+        struct SampleState
+        {
+            uintptr_t pcs[kMaxStackDepth];
+            int count = 0;
+            int max = 0;
+        };
+        SampleState* g_sample = nullptr;
+        sem_t g_sampleDone;
+        std::mutex g_sampleMutex;
+
+        _Unwind_Reason_Code SampleTrace(_Unwind_Context* context, void* arg)
+        {
+            auto* state = static_cast<SampleState*>(arg);
+            if (state->count < state->max)
+                state->pcs[state->count++] = uintptr_t(_Unwind_GetIP(context));
+            return state->count < state->max ? _URC_NO_REASON : _URC_END_OF_STACK;
+        }
+
+        void SampleHandler(int, siginfo_t*, void*)
+        {
+            if (g_sample)
+                _Unwind_Backtrace(SampleTrace, g_sample);
+            sem_post(&g_sampleDone);
+        }
+
+        uintptr_t ExeLoadBase()
+        {
+            static const uintptr_t base = [] {
+                uintptr_t b = 0;
+                dl_iterate_phdr([](dl_phdr_info* info, size_t, void* out) {
+                    *static_cast<uintptr_t*>(out) = uintptr_t(info->dlpi_addr);
+                    return 1;
+                }, &b);
+                return b;
+            }();
+            return base;
+        }
+    }
+
+    std::string SampleHostStack(uint32_t hostThreadId, int count)
+    {
+        std::lock_guard lock(g_sampleMutex);
+        static const bool ready = [] {
+            sem_init(&g_sampleDone, 0, 0);
+            struct sigaction sa{};
+            sa.sa_sigaction = SampleHandler;
+            sa.sa_flags = SA_SIGINFO | SA_RESTART;
+            sigemptyset(&sa.sa_mask);
+            return sigaction(SIGUSR1, &sa, nullptr) == 0;
+        }();
+        if (!ready)
+            return "?";
+        SampleState state;
+        state.max = std::min(count, kMaxStackDepth);
+        g_sample = &state;
+        if (syscall(SYS_tgkill, getpid(), hostThreadId, SIGUSR1) != 0)
+        {
+            g_sample = nullptr;
+            return "?";
+        }
+        timespec deadline{};
+        clock_gettime(CLOCK_REALTIME, &deadline);
+        deadline.tv_nsec += 200000000;
+        if (deadline.tv_nsec >= 1000000000) { deadline.tv_sec++; deadline.tv_nsec -= 1000000000; }
+        const bool done = sem_timedwait(&g_sampleDone, &deadline) == 0;
+        g_sample = nullptr;
+        if (!done)
+            return "?";
+        std::string out;
+        const uintptr_t base = ExeLoadBase();
+        for (int i = 0; i < state.count; i++)
+            out += fmt::format(" {:X}", state.pcs[i] - base);
+        return out;
+    }
+#else
     std::string SampleHostStack(uint32_t hostThreadId, int count)
     {
         HANDLE handle = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, FALSE, hostThreadId);
@@ -239,6 +338,7 @@ namespace dao::kernel
         ::CloseHandle(handle);
         return FormatOffsets(offsets, n);
     }
+#endif
 
     void DumpThreads()
     {
@@ -350,6 +450,7 @@ namespace dao::kernel
         {
             struct Start { std::shared_ptr<GuestThread> thread; };
             auto* start = new Start{ thread };
+#ifdef _WIN32
             DWORD hostId = 0;
             thread->hostHandle = ::CreateThread(nullptr, kHostStackSize, [](void* p) -> DWORD {
                 std::unique_ptr<Start> start(static_cast<Start*>(p));
@@ -365,6 +466,30 @@ namespace dao::kernel
                 return nullptr;
             }
             thread->hostThreadId = hostId;
+#else
+            // The recompiled code nests as deeply as the guest did: a big host stack.
+            pthread_attr_t attr;
+            pthread_attr_init(&attr);
+            pthread_attr_setstacksize(&attr, kHostStackSize);
+            pthread_t handle{};
+            const int error = pthread_create(&handle, &attr, [](void* p) -> void* {
+                std::unique_ptr<Start> start(static_cast<Start*>(p));
+                auto self = start->thread;
+                self->hostThreadId = GetCurrentThreadId();
+                self->Run();
+                Unregister(self.get());
+                return nullptr;
+            }, start);
+            pthread_attr_destroy(&attr);
+            if (error != 0)
+            {
+                LOGE("pthread_create failed ({})", error);
+                delete start;
+                Unregister(thread.get());
+                return nullptr;
+            }
+            thread->hostHandle = reinterpret_cast<HANDLE>(handle);
+#endif
         }
         return thread;
     }

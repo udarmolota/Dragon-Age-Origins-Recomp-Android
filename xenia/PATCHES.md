@@ -91,3 +91,21 @@ These are this project's (MIT, the repository's `LICENSE`), not Xenia's.
 
 The first port was made by a patch script; the tree has been edited directly
 since, so this file, not a script, is the record.
+
+## Android (DAODroid)
+
+The shared GPU, UI and base code here is also built for Android by the DAODroid
+repository (`xenia-vulkan/CMakeLists.txt` there, with Xenia's Vulkan backend
+imported next to it). The Windows-only parts of this project's changes are guarded
+with `XE_PLATFORM_WIN32`: the vblank thread's priority in `gpu/graphics_system.cc`,
+and the frame generation pacer's waitable timer and wake event in
+`ui/dao_frame_pacer.cc` (elsewhere its condition variable sleeps until the frame is
+due; frame generation itself is Direct3D 12 only). `DAORecomp/gpu/xenia_memory.cpp`
+protects the watched pages with `mprotect` on POSIX.
+
+Upstream code that didn't build or link for Android with the NDK (r27, Bionic), fixed in
+place and guarded with `XE_PLATFORM_ANDROID` or `XE_PLATFORM_GNU_LINUX`: `base/mutex.cc`
+(`pthread_t` is an integer), `base/threading_posix.cc` (no robust mutexes;
+`SetAndroidPreApi26Name` const), `base/filesystem_android.cc` (its `SetAttributes` stub
+duplicated `filesystem_posix.cc`'s), `ui/imgui_drawer.cc` (fontconfig and GTK are desktop
+Linux only).

@@ -1,4 +1,7 @@
 #pragma once
+#ifdef __ANDROID__
+union SDL_Event;
+#endif
 // Host input for the guest's XamInput*: SDL3 gamepads (XInput, DualSense, Switch,
 // ... through SDL's drivers), the keyboard while the game window has focus, and
 // scripted presses for automated testing (DAO_INPUT_SCRIPT). All of it is merged
@@ -36,6 +39,15 @@ namespace dao::input
     };
 
     void Initialize();
+#ifdef __ANDROID__
+    // From the thread that pumps SDL's events: gamepads connecting and disconnecting.
+    void OnSdlEvent(const SDL_Event& event);
+    // The app's on-screen pad (any thread): Xbox buttons (Button bits), sticks in -1..1
+    // (Y up), triggers in 0..1. Merged with a physical pad: buttons added, the larger
+    // deflection of each axis wins.
+    void SetVirtualPad(uint16_t buttons, float leftX, float leftY, float rightX, float rightY, float leftTrigger,
+        float rightTrigger);
+#endif
 
     // False when no controller is connected for `user`.
     bool GetState(uint32_t user, PadState& out);

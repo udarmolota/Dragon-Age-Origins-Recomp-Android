@@ -1,7 +1,12 @@
 # FFmpeg subset (libavutil + libavcodec with Xenia's xmaframes decoder), lifted from
 # xenia-canary third_party/CMakeLists.txt. Sources: third_party/FFmpeg, config: third_party/ffmpeg-xenia.
-set(XE_TARGET_X86_64 TRUE)
-set(XE_TARGET_AARCH64 FALSE)
+# The Windows build is x86-64; an Android build sets these before including this file.
+if(NOT DEFINED XE_TARGET_X86_64)
+  set(XE_TARGET_X86_64 TRUE)
+endif()
+if(NOT DEFINED XE_TARGET_AARCH64)
+  set(XE_TARGET_AARCH64 FALSE)
+endif()
 # Common function to apply shared FFmpeg settings to a target.
 function(ffmpeg_common target)
   target_compile_definitions(${target} PRIVATE

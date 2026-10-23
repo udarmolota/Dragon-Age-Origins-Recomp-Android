@@ -58,9 +58,13 @@ namespace dao::content
         const fs::path xexp = kernel::UpdateRoot(gameRoot) / "default.xexp";
         std::error_code ec;
         TitleUpdateState state{ fs::is_regular_file(xexp, ec) };
+#ifdef _WIN32
         const DWORD attributes = GetFileAttributesW(xexp.c_str());
-        if (state.present && attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
-            fs::file_size(xexp, ec) <= kMaxXexpSize && !ec)
+        const bool plain = attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_REPARSE_POINT);
+#else
+        const bool plain = !fs::is_symlink(xexp, ec);
+#endif
+        if (state.present && plain && fs::file_size(xexp, ec) <= kMaxXexpSize && !ec)
             state.number = kernel::TitleUpdateNumber(xexp);
         return state;
     }

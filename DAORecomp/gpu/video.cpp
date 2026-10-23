@@ -92,6 +92,16 @@ namespace dao::gpu
     }
 }
 
+namespace dao::gpu
+{
+    void SetDisplayMode(uint32_t width, uint32_t height)
+    {
+        g_video.displayWidth = width;
+        g_video.displayHeight = height;
+        LOGI("Display mode reported to the game: {}x{}", width, height);
+    }
+}
+
 namespace dao::imp
 {
     using namespace dao::kernel;

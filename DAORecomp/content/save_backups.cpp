@@ -15,7 +15,7 @@ namespace dao::content
         using namespace std::chrono;
 
         // The restore's name for the save it sets aside (see save_backups.h).
-        constexpr std::wstring_view kAside = L"~current";
+        constexpr std::string_view kAside = "~current";
 
         // A display name file's bytes (kDisplayNameSize at most); empty if there's none.
         std::string ReadNameFile(const fs::path& path)
@@ -60,7 +60,16 @@ namespace dao::content
                          !timeError && it->is_regular_file(timeError))
                     newest = std::max(newest.value_or(time), time);
             }
+#ifdef _WIN32
             return newest ? floor<seconds>(clock_cast<system_clock>(*newest)) : sys_seconds{};
+#else
+            // (No clock_cast in the NDK's libc++ yet: through the clocks' current offset.)
+            if (!newest)
+                return sys_seconds{};
+            const auto offset = system_clock::now().time_since_epoch() - fs::file_time_type::clock::now().time_since_epoch();
+            return floor<seconds>(sys_time<system_clock::duration>(
+                duration_cast<system_clock::duration>(newest->time_since_epoch() + offset)));
+#endif
         }
 
         SaveVersion DescribeSave(const fs::path& folder, const std::string& name)
@@ -94,7 +103,7 @@ namespace dao::content
         // three are there, or it isn't a plain folder), and it's left alone.
         bool FinishStoppedRestore(const fs::path& backups, const fs::path& saves, const std::string& name)
         {
-            const fs::path aside = backups / (FromUtf8(name).native() + std::wstring(kAside));
+            const fs::path aside = backups / fs::path(FromUtf8(name)).concat(kAside);
             std::error_code ec;
             if (!fs::exists(fs::symlink_status(aside, ec)))
                 return true;
@@ -123,7 +132,7 @@ namespace dao::content
 
     fs::path SaveWritingMarker(const fs::path& userRoot, const fs::path& name)
     {
-        return SaveBackupsFolder(userRoot) / (name.native() + L".writing");
+        return SaveBackupsFolder(userRoot) / fs::path(name).concat(".writing");
     }
 
     std::vector<SaveBackup> ListSaveBackups(const fs::path& userRoot, bool finishStopped)
@@ -134,11 +143,11 @@ namespace dao::content
         std::error_code ec;
         for (fs::directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec))
         {
-            const std::wstring file = it->path().filename().native();
+            const std::string file = Utf8(it->path().filename());
             if (file.ends_with(kAside))
-                stopped.push_back(WideToUtf8(file.substr(0, file.size() - kAside.size())));
+                stopped.push_back(file.substr(0, file.size() - kAside.size()));
             // Backups: not one being made (<name>.new) or a restore's work (<name>~current).
-            else if (const std::string name = WideToUtf8(file); IsContentName(name) && IsPlainFolder(it->path()))
+            else if (const std::string& name = file; IsContentName(name) && IsPlainFolder(it->path()))
                 names.push_back(name);
         }
         for (const std::string& name : stopped)
@@ -178,8 +187,8 @@ namespace dao::content
         const fs::path saves = ContentFolder(userRoot, kTitleId, kContentSave);
         const fs::path file = FromUtf8(name);
         const fs::path backup = backups / file, current = saves / file;
-        const fs::path aside = backups / (file.native() + std::wstring(kAside));
-        const fs::path nameFile = file.native() + L".name";
+        const fs::path aside = backups / fs::path(file).concat(kAside);
+        const fs::path nameFile = fs::path(file).concat(".name");
         if (!FinishStoppedRestore(backups, saves, name))
             return { false, fmt::format("save_backups/{}~current, left by a restore that stopped, holds a save: "
                                         "move it somewhere else first", name) };

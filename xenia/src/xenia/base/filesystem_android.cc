@@ -274,9 +274,12 @@ int OpenAndroidContentFileDescriptor(const std::string_view uri,
   return file_descriptor;
 }
 
+// DAO: filesystem_posix.cc's chmod version is built too and does the job.
+#if 0
 bool SetAttributes(const std::filesystem::path& path, uint64_t attributes) {
   return false;
 }
+#endif
 
 }  // namespace filesystem
 }  // namespace xe

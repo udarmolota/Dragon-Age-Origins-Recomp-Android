@@ -720,6 +720,15 @@ namespace dao::kernel
         return WaitMultiple(std::span(&object, 1), false, timeout, alertable);
     }
 
+#ifndef _WIN32
+    void ShortSleep(uint32_t microseconds)
+    {
+        // The kernel's timer slack (50 us by default) is the resolution here.
+        timespec ts{ time_t(microseconds / 1000000), long(microseconds % 1000000) * 1000 };
+        while (clock_nanosleep(CLOCK_MONOTONIC, 0, &ts, &ts) == EINTR)
+            ;
+    }
+#else
     void ShortSleep(uint32_t microseconds)
     {
         // On Windows, a high resolution waitable timer: NtDelayExecution, like
@@ -753,6 +762,7 @@ namespace dao::kernel
         else
             SwitchToThread();
     }
+#endif
 
     uint32_t DelayExecution(const int64_t* timeout, bool alertable)
     {

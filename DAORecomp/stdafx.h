@@ -1,6 +1,10 @@
 #pragma once
 
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include "platform.h"
+#endif
 
 #include <algorithm>
 #include <array>

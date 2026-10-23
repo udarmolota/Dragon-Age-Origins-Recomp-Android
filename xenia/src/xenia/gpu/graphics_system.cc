@@ -13,7 +13,10 @@
 #include "xenia/base/clock.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
+#include "xenia/base/platform.h"
+#if XE_PLATFORM_WIN32
 #include "xenia/base/platform_win.h"
+#endif
 #include "xenia/base/profiling.h"
 #include "xenia/base/threading.h"
 #include "xenia/dao_host.h"
@@ -105,7 +108,9 @@ X_STATUS GraphicsSystem::Setup(Memory* memory,
             // at normal priority, the guest's busy threads (priority 2 and up
             // run at HIGHEST) could delay it. At HIGHEST it at least takes
             // turns with them, and it sleeps nearly all the time.
+#if XE_PLATFORM_WIN32
             SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+#endif
             uint64_t normalized_framerate_limit =
                 std::max<uint64_t>(0, cvars::framerate_limit);
 

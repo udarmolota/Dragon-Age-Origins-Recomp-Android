@@ -10,6 +10,10 @@
 
 #include "xenia/memory.h"
 
+#ifndef _WIN32
+#include <sys/mman.h>
+#endif
+
 using dao::kernel::g_memory;
 
 namespace xe
@@ -94,21 +98,32 @@ namespace xe
     // Sets the host protection of physical pages [first, first + count) in all views.
     static void ProtectPhysicalPages(uint32_t first, uint32_t count, bool readOnly)
     {
+#ifdef _WIN32
         const DWORD protect = readOnly ? PAGE_READONLY : PAGE_READWRITE;
+        DWORD old;
+        const auto protectRange = [&](uint32_t address, size_t size) {
+            VirtualProtect(g_memory.Translate(address), size, protect, &old);
+        };
+#else
+        // The three views are separate mappings of the bank: each has its own protection.
+        const int protect = readOnly ? PROT_READ : PROT_READ | PROT_WRITE;
+        const auto protectRange = [&](uint32_t address, size_t size) {
+            mprotect(g_memory.Translate(address), size, protect);
+        };
+#endif
         const size_t bytes = size_t(count) << kPageShift;
         const uint32_t offset = first << kPageShift;
-        DWORD old;
-        VirtualProtect(g_memory.Translate(0xA0000000 + offset), bytes, protect, &old);
-        VirtualProtect(g_memory.Translate(0xC0000000 + offset), bytes, protect, &old);
+        protectRange(0xA0000000 + offset, bytes);
+        protectRange(0xC0000000 + offset, bytes);
         // 0xE0000000 + x is physical x + 0x1000; physical page 0 has no alias there.
         if (first == 0)
         {
             if (count > 1)
-                VirtualProtect(g_memory.Translate(0xE0000000), bytes - kPageSize, protect, &old);
+                protectRange(0xE0000000, bytes - kPageSize);
         }
         else
         {
-            VirtualProtect(g_memory.Translate(0xE0000000 + offset - kPageSize), bytes, protect, &old);
+            protectRange(0xE0000000 + offset - kPageSize, bytes);
         }
     }
 
@@ -294,8 +309,14 @@ namespace xe
             return true;
         // Another thread may have faulted on the same watched page and unprotected
         // it while this one waited for the lock: retry if the page is writable now.
+#ifdef _WIN32
         MEMORY_BASIC_INFORMATION info;
         return VirtualQuery(host_address, &info, sizeof(info)) && (info.Protect & PAGE_READWRITE);
+#else
+        // Only watched pages are ever write-protected in the physical views, so a
+        // fault on a page that is no longer watched is one that was just unwatched.
+        return !state_->IsWatched(dao::kernel::PhysicalAddressOf(address) >> kPageShift);
+#endif
     }
 }
 

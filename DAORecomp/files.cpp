@@ -5,6 +5,8 @@
 
 #include "text.h"
 
+namespace fs = std::filesystem;
+
 namespace dao
 {
     bool IsBadNameChar(char c)
@@ -37,14 +39,19 @@ namespace dao
 
     bool IsPlainFolder(const std::filesystem::path& path)
     {
+#ifdef _WIN32
         const DWORD attributes = GetFileAttributesW(path.c_str());
         return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) &&
             !(attributes & FILE_ATTRIBUTE_REPARSE_POINT);
+#else
+        std::error_code ec;
+        return fs::is_directory(path, ec) && !fs::is_symlink(path, ec);
+#endif
     }
 
     bool WriteFileAtomically(const std::filesystem::path& path, std::string_view data)
     {
-        const std::filesystem::path part = std::filesystem::path(path).concat(L".part");
+        const std::filesystem::path part = std::filesystem::path(path).concat(".part");
         bool written = false;
         {
             std::ofstream out(part, std::ios::binary | std::ios::trunc);

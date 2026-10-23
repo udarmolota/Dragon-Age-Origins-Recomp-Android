@@ -21,6 +21,11 @@ namespace dao::gpu
 
     extern VideoState g_video;
 
+    // The display mode reported to the game (VdQueryVideoMode, the display information):
+    // another than 1280x720 before the game starts, e.g. a wider one the game projects
+    // its scene at (the host then shows the frame at that aspect ratio). Before LoadXex.
+    void SetDisplayMode(uint32_t width, uint32_t height);
+
     // The frame rate, one of kFrameRates (video.frame_rate, or as set in the
     // Graphics tab).
     int FrameRate();

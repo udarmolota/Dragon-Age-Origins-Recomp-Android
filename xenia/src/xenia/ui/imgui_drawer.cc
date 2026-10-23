@@ -31,11 +31,12 @@
 #include <ShlObj_core.h>
 #endif
 
-#if XE_PLATFORM_LINUX
+// DAO: desktop Linux only (not Android).
+#if XE_PLATFORM_GNU_LINUX
 #include <fontconfig/fontconfig.h>
 #endif
 
-#ifdef XE_PLATFORM_LINUX
+#ifdef XE_PLATFORM_GNU_LINUX
 #include <gtk/gtk.h>
 #endif
 
@@ -141,7 +142,7 @@ void ImGuiDrawer::RemoveNotification(ImGuiNotification* dialog) {
   DetachIfLastWindowRemoved();
 }
 
-#ifdef XE_PLATFORM_LINUX
+#ifdef XE_PLATFORM_GNU_LINUX
 static void SetClipboardText(void* user_data, const char* text) {
   GtkClipboard* clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
   gtk_clipboard_set_text(clipboard, text, -1);
@@ -169,7 +170,7 @@ void ImGuiDrawer::Initialize() {
   InitializeFonts(font_size);
   InitializeFonts(title_font_size);
 
-#ifdef XE_PLATFORM_LINUX
+#ifdef XE_PLATFORM_GNU_LINUX
   io.SetClipboardTextFn = SetClipboardText;
   io.GetClipboardTextFn = GetClipboardText;
 #endif
@@ -439,7 +440,7 @@ bool ImGuiDrawer::LoadJapaneseFont(ImGuiIO& io, float font_size) {
   return true;
 #endif
 
-#if XE_PLATFORM_LINUX
+#if XE_PLATFORM_GNU_LINUX
   // On Linux, find and merge CJK font using fontconfig
   FcConfig* config = FcInitLoadConfigAndFonts();
   if (!config) {

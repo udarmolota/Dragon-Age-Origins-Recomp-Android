@@ -12,7 +12,12 @@
 #include <system_error>
 
 #include "xenia/base/logging.h"
+#include "xenia/base/platform.h"
+#if XE_PLATFORM_WIN32
 #include "xenia/base/platform_win.h"
+#else
+#include <thread>
+#endif
 
 namespace xe {
 namespace ui {
@@ -131,7 +136,9 @@ bool Presenter::DaoQueueFramePaints(const GuestOutputProperties& properties) {
     return false;
   }
   if (!dao_pacer_thread_.joinable()) {
+#if XE_PLATFORM_WIN32
     dao_pacer_wake_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+#endif
     try {
       dao_pacer_thread_ = std::thread(&Presenter::DaoPacerThread, this);
     } catch (const std::system_error& error) {
@@ -152,9 +159,11 @@ bool Presenter::DaoQueueFramePaints(const GuestOutputProperties& properties) {
   dao_pacer_cv_.notify_one();
   // (Closed by DaoStopPacer, which the presenter's destruction calls, never
   // while the guest output thread refreshes.)
+#if XE_PLATFORM_WIN32
   if (dao_pacer_wake_) {
     SetEvent(dao_pacer_wake_);
   }
+#endif
   return true;
 }
 
@@ -174,26 +183,32 @@ void Presenter::DaoStopPacer() {
     dao_pacer_shutdown_ = true;
   }
   dao_pacer_cv_.notify_one();
+#if XE_PLATFORM_WIN32
   if (dao_pacer_wake_) {
     SetEvent(dao_pacer_wake_);
   }
+#endif
   if (dao_pacer_thread_.joinable()) {
     dao_pacer_thread_.join();
   }
+#if XE_PLATFORM_WIN32
   if (dao_pacer_wake_) {
     CloseHandle(dao_pacer_wake_);
     dao_pacer_wake_ = nullptr;
   }
+#endif
 }
 
 void Presenter::DaoPacerThread() {
   // Above the game's threads: a late present is a visible stutter.
+#if XE_PLATFORM_WIN32
   SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
   HANDLE timer = CreateWaitableTimerExW(
       nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
       TIMER_ALL_ACCESS);
   // (The wake event: made before the thread, closed after it.)
   HANDLE wake = dao_pacer_wake_;
+#endif
   for (;;) {
     DaoPacerStage stage;
     uint64_t serial;
@@ -225,6 +240,7 @@ void Presenter::DaoPacerThread() {
         break;
       }
       if (remaining > kSpin) {
+#if XE_PLATFORM_WIN32
         // In 100 ns units, negative: relative.
         LARGE_INTEGER sleep;
         sleep.QuadPart = -std::max<LONGLONG>(
@@ -243,13 +259,23 @@ void Presenter::DaoPacerThread() {
           Sleep(1);
         }
         std::lock_guard<std::mutex> lock(dao_pacer_mutex_);
+#else
+        // DAO (Android): the condition variable, which a newer guest output
+        // and shutdown notify, sleeps until just before it's due.
+        std::unique_lock<std::mutex> lock(dao_pacer_mutex_);
+        dao_pacer_cv_.wait_until(lock, due - kSpin);
+#endif
         if (dao_pacer_shutdown_ || dao_pacer_stage_ != stage ||
             dao_pacer_serial_ != serial) {
           superseded = true;
           break;
         }
       } else {
+#if XE_PLATFORM_WIN32
         YieldProcessor();
+#else
+        std::this_thread::yield();
+#endif
       }
     }
     if (superseded) {
@@ -307,9 +333,11 @@ void Presenter::DaoPacerThread() {
       }
     }
   }
+#if XE_PLATFORM_WIN32
   if (timer) {
     CloseHandle(timer);
   }
+#endif
 }
 
 }  // namespace ui

@@ -276,6 +276,8 @@ void WaitForMultiObjectSignal(uint32_t expected,
 class PosixConditionBase {
  public:
   PosixConditionBase() {
+#if !XE_PLATFORM_ANDROID
+    // DAO: Bionic has no robust mutexes; the default mutex stays.
     // Initialize as robust mutex to handle thread termination gracefully
     pthread_mutexattr_t attr;
     pthread_mutexattr_init(&attr);
@@ -286,6 +288,7 @@ class PosixConditionBase {
     pthread_mutex_destroy(native_mutex);      // Destroy default mutex
     pthread_mutex_init(native_mutex, &attr);  // Reinit as robust
     pthread_mutexattr_destroy(&attr);
+#endif
   }
 
   virtual ~PosixConditionBase() = default;
@@ -300,7 +303,9 @@ class PosixConditionBase {
     int lock_result = pthread_mutex_lock(native_mutex);
     if (lock_result == EOWNERDEAD) {
       // Recover from dead owner
+#if !XE_PLATFORM_ANDROID
       pthread_mutex_consistent(native_mutex);
+#endif
     } else if (lock_result != 0) {
       return WaitResult::kFailed;
     }
@@ -375,7 +380,9 @@ class PosixConditionBase {
           // Successfully acquired lock or recovered from dead owner
           if (result == EOWNERDEAD) {
             // Make mutex consistent after previous owner died
+#if !XE_PLATFORM_ANDROID
             pthread_mutex_consistent(native_mutex);
+#endif
           }
           locks.emplace_back(handles[i]->mutex_, std::adopt_lock);
         } else {
@@ -793,7 +800,8 @@ class PosixCondition<Thread> final : public PosixConditionBase {
   }
 
 #if XE_PLATFORM_ANDROID
-  void SetAndroidPreApi26Name(const std::string_view name) {
+  // DAO: const, as set_name (which calls it) is.
+  void SetAndroidPreApi26Name(const std::string_view name) const {
     if (android_pthread_getname_np_) {
       return;
     }
@@ -1096,7 +1104,7 @@ class PosixCondition<Thread> final : public PosixConditionBase {
   // Name accessible via name() on Android before API 26 which added
   // pthread_getname_np.
   mutable std::mutex android_pre_api_26_name_mutex_;
-  char android_pre_api_26_name_[16];
+  mutable char android_pre_api_26_name_[16];  // DAO: set from const set_name
 #endif
 };
 
