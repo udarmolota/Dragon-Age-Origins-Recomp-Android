@@ -8,7 +8,12 @@ namespace dao::patches
     {
         constexpr Patch kPatches[] = {
             { "skip_intro_logos", "Skip intro logos",
-                "Skips the EA, BioWare and Edge of Reality logo movies at startup.", false },
+                "Skips the EA, BioWare and Edge of Reality logo movies at startup.",
+#ifdef __ANDROID__
+                true },
+#else
+                false },
+#endif
         };
 
         constexpr std::string_view kIntroLogos[] = {

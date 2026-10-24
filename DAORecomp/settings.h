@@ -65,13 +65,23 @@ namespace dao
         // 2 = 2560x1440, 3 = 3840x2160.
         int resolutionScale = 1;
         // Scaling/sharpening applied when presenting to a window of another size.
+#ifdef __ANDROID__
+        // A phone's GPU: plain scaling (FSR costs GPU time there, and the
+        // pre-rotated output is bilinear).
+        Upscaler upscaler = Upscaler::Bilinear;
+#else
         Upscaler upscaler = Upscaler::Fsr;
+#endif
         // FSR: sharpness reduction in stops (0 = sharpest, 2 = softest).
         // CAS: additional sharpness (0..1).
         float sharpness = 0.2f;
         // Upscales the 3D scenes to the window size with motion vectors (the UI
         // is scaled separately); Auto picks FSR 4 where supported, else FSR 3.1.
+#ifdef __ANDROID__
+        TemporalUpscaler temporalUpscaler = TemporalUpscaler::Off; // none on Vulkan
+#else
         TemporalUpscaler temporalUpscaler = TemporalUpscaler::Auto;
+#endif
         float temporalSharpness = 0.3f; // 0..1, FSR's (XeSS and DLSS don't sharpen)
         // Frame generation (FSR 3.1): with temporal upscaling, a frame generated
         // between each two of the 3D scenes, shown half a frame apart: up to twice the
@@ -130,8 +140,15 @@ namespace dao
         int anisotropicFiltering = 0;
         // The engine's dynamic character shadows and its post-processing (frame
         // buffer effects): switches of the PC version left in the 360 engine.
+#ifdef __ANDROID__
+        // Off on a phone: the GPU is the limit (Turnip needs TU_DEBUG=sysmem with the
+        // shadows off on the Adreno 830; the app sets it).
+        bool shadows = false;
+        bool postProcessing = false;
+#else
         bool shadows = true;
         bool postProcessing = true;
+#endif
         bool fullscreen = false;
         int windowWidth = 1280;
         int windowHeight = 720;
