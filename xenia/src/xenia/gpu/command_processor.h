@@ -615,6 +615,15 @@ class CommandProcessor {
   std::unique_ptr<xe::threading::Event> write_ptr_index_event_;
   std::atomic<uint32_t> write_ptr_index_;
 
+  // DAORecomp (from the State of Decay port): a ring re-initialized while the
+  // worker runs the old one (State of Decay sets up a second ring 0.26 s after
+  // the first, and about 1 start in 9 stalled after the first swap). The ring's
+  // base and indices change under ring_mutex_, and each change bumps
+  // ring_generation_, so the worker drops the read index it reached in a ring
+  // that was replaced.
+  std::mutex ring_mutex_;
+  uint32_t ring_generation_ = 0;
+
   uint64_t bin_select_ = 0xFFFFFFFFull;
   uint64_t bin_mask_ = 0xFFFFFFFFull;
 

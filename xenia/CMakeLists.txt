@@ -8,6 +8,10 @@
 # scripts/build_xenia_shaders.py (FXC from the Windows SDK).
 
 set(XE_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
+# DAORecomp's root (tools/, thirdparty/): this folder's parent, also when another project
+# (State of Decay's runtime) builds this Xenia from outside its own source tree.
+get_filename_component(_dao_recomp_root ${XE_ROOT} DIRECTORY)
+set(DAO_RECOMP_ROOT ${_dao_recomp_root} CACHE PATH "DAORecomp's root, with tools/ and thirdparty/")
 set(XE_SRC ${XE_ROOT}/src/xenia)
 set(XE_TP ${DAO_XENIA_THIRD_PARTY})
 # Xenia includes them as "third_party/<library>/...".
@@ -121,8 +125,8 @@ target_link_libraries(xenia-ui-d3d12 PUBLIC xenia-base xenia-ui PRIVATE d3d12 dx
 dao_xenia_defaults(xenia-ui-d3d12)
 # Low latency's SDK headers: AMD Radeon Anti-Lag 2's (ui/d3d12/dao_low_latency.cc), and
 # NVIDIA Streamline's (dao_streamline.cc; its DLLs are loaded at run time).
-target_include_directories(xenia-ui-d3d12 SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/thirdparty/antilag2
-    ${CMAKE_SOURCE_DIR}/tools/Streamline-SDK/include)
+target_include_directories(xenia-ui-d3d12 SYSTEM PRIVATE ${DAO_RECOMP_ROOT}/thirdparty/antilag2
+    ${DAO_RECOMP_ROOT}/tools/Streamline-SDK/include)
 
 add_library(xenia-gpu STATIC)
 dao_xenia_sources(xenia-gpu ${XE_SRC}/gpu)
@@ -137,12 +141,12 @@ dao_xenia_defaults(xenia-gpu-d3d12)
 # upscaler's backends (gpu/d3d12/dao_upscale_fsr.cc, dao_upscale_xess.cc,
 # dao_upscale_dlss.cc) and frame generation (dao_upscale_fg.cc); the DLLs are
 # loaded at run time.
-set(DAO_FFX_SDK ${CMAKE_SOURCE_DIR}/tools/FidelityFX-SDK/Kits/FidelityFX)
+set(DAO_FFX_SDK ${DAO_RECOMP_ROOT}/tools/FidelityFX-SDK/Kits/FidelityFX)
 target_include_directories(xenia-gpu-d3d12 SYSTEM PRIVATE ${DAO_FFX_SDK}/api/include ${DAO_FFX_SDK}/upscalers/include
-    ${DAO_FFX_SDK}/framegeneration/include ${CMAKE_SOURCE_DIR}/tools/XeSS-SDK/inc
-    ${CMAKE_SOURCE_DIR}/tools/Streamline-SDK/include
+    ${DAO_FFX_SDK}/framegeneration/include ${DAO_RECOMP_ROOT}/tools/XeSS-SDK/inc
+    ${DAO_RECOMP_ROOT}/tools/Streamline-SDK/include
     # Neural rendering's runtime API (dao_upscale_neural.cc).
-    ${CMAKE_SOURCE_DIR}/thirdparty/lmxxf-nr/include)
+    ${DAO_RECOMP_ROOT}/thirdparty/lmxxf-nr/include)
 
 # Everything the runtime links.
 add_library(dao-xenia INTERFACE)

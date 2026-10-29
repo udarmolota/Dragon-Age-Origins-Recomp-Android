@@ -405,10 +405,29 @@ void CommandProcessor::WorkerThreadMain() {
         continue;
       }
     }
-    assert_true(read_ptr_index_ != write_ptr_index);
+    // DAORecomp: the ring's state as one snapshot (see ring_mutex_); the ring
+    // may have been replaced since the wait.
+    uint32_t generation, read_ptr_index;
+    {
+      std::lock_guard<std::mutex> lock(ring_mutex_);
+      generation = ring_generation_;
+      read_ptr_index = read_ptr_index_;
+      write_ptr_index = write_ptr_index_.load();
+    }
+    if (write_ptr_index == 0xBAADF00D || read_ptr_index == write_ptr_index) {
+      continue;
+    }
 
     // Execute. Note that we handle wraparound transparently.
-    read_ptr_index_ = ExecutePrimaryBuffer(read_ptr_index_, write_ptr_index);
+    read_ptr_index = ExecutePrimaryBuffer(read_ptr_index, write_ptr_index);
+
+    std::lock_guard<std::mutex> lock(ring_mutex_);
+    if (generation != ring_generation_) {
+      // DAORecomp: replaced while it ran; the new ring starts from its own
+      // index 0.
+      continue;
+    }
+    read_ptr_index_ = read_ptr_index;
 
     // TODO(benvanik): use reader->Read_update_freq_ and only issue after moving
     //     that many indices.
@@ -488,6 +507,12 @@ void CommandProcessor::ShutdownContext() {
 }
 
 void CommandProcessor::InitializeRingBuffer(uint32_t ptr, uint32_t size_log2) {
+  // DAORecomp: under ring_mutex_, with the write index reset too: the old
+  // ring's write index would otherwise be read against the new ring's read
+  // index 0.
+  std::lock_guard<std::mutex> lock(ring_mutex_);
+  ++ring_generation_;
+  write_ptr_index_.store(0);
   read_ptr_index_ = 0;
   primary_buffer_ptr_ = ptr;
   primary_buffer_size_ = uint32_t(1) << (size_log2 + 3);
