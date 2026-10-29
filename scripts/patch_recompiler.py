@@ -250,6 +250,24 @@ ANCHOR = '    default:\n        return false;\n    }'
 OLD_MFTB = '''        println("\\t{}.u64 = __rdtsc();", r(insn.operands[0]));'''
 NEW_MFTB = '''        println("\\t{}.u64 = PPC_QUERY_TIMEBASE();", r(insn.operands[0]));'''
 
+# fctid/fctidz/fctiwz went through simde's SSE2 conversions, which on ARM64 (no native path)
+# round ties away from zero whatever FPSCR[RN] says, give 0 for NaN and turn exactly INT32_MAX
+# into INT32_MIN. These helpers follow the PowerPC definition on every host (found in the State
+# of Decay port; 184 cases in the four FPSCR modes pass on x86-64, x86-64-v3 and the S25's ARM64).
+OLD_FCTID = '''        println("\\t{}.s64 = ({}.f64 > double(LLONG_MAX)) ? LLONG_MAX : simde_mm_cvtsd_si64(simde_mm_load_sd(&{}.f64));", f(insn.operands[0]), f(insn.operands[1]), f(insn.operands[1]));'''
+NEW_FCTID = '''        println("\\t{}.s64 = PPCRoundToInt64({}.f64);", f(insn.operands[0]), f(insn.operands[1]));'''
+OLD_FCTIDZ = '''        println("\\t{}.s64 = ({}.f64 > double(LLONG_MAX)) ? LLONG_MAX : simde_mm_cvttsd_si64(simde_mm_load_sd(&{}.f64));", f(insn.operands[0]), f(insn.operands[1]), f(insn.operands[1]));'''
+NEW_FCTIDZ = '''        println("\\t{}.s64 = PPCTruncToInt64({}.f64);", f(insn.operands[0]), f(insn.operands[1]));'''
+OLD_FCTIWZ = '''        println("\\t{}.s64 = ({}.f64 > double(INT_MAX)) ? INT_MAX : simde_mm_cvttsd_si32(simde_mm_load_sd(&{}.f64));", f(insn.operands[0]), f(insn.operands[1]), f(insn.operands[1]));'''
+NEW_FCTIWZ = '''        println("\\t{}.s64 = PPCTruncToInt32({}.f64);", f(insn.operands[0]), f(insn.operands[1]));'''
+
+# Jump tables switch on the index's low 32 bits, as the guest bounds it (cmplwi) and indexes
+# the table with it: with dirty upper bits the 360 takes the right case, while a 64-bit switch
+# matched none and read clang's table out of range (State of Decay crashed this way; found
+# there).
+OLD_SWITCH = '''            println("\\tswitch ({}.u64) {{", r(switchTable->second.r));'''
+NEW_SWITCH = '''            println("\\tswitch ({}.u32) {{", r(switchTable->second.r));'''
+
 # ...which the runtime provides through this hook in the generated ppc_context.h.
 CONTEXT_ANCHOR = '#define PPC_MEMORY_SIZE 0x100000000ull'
 CONTEXT_ADDITION = '''#define PPC_MEMORY_SIZE 0x100000000ull
@@ -257,7 +275,38 @@ CONTEXT_ADDITION = '''#define PPC_MEMORY_SIZE 0x100000000ull
 #ifndef PPC_QUERY_TIMEBASE
 uint64_t PPCQueryTimebase() noexcept;
 #define PPC_QUERY_TIMEBASE() PPCQueryTimebase()
-#endif'''
+#endif
+
+// fctid/fctidz/fctiwz as PowerPC defines them: NaN gives the most negative value, out-of-range
+// values saturate (checked before rounding: every double at or beyond 2^63 is an integer), the
+// rest round in the current mode (FPSCR[RN], kept in MXCSR/FPCR) or truncate. The generated
+// code is built with strict floating point, so the compiler doesn't assume the mode.
+inline int64_t PPCRoundToInt64(double v) noexcept
+{
+    if (__builtin_isnan(v) || v < -9223372036854775808.0)
+        return INT64_MIN;
+    if (v >= 9223372036854775808.0)
+        return INT64_MAX;
+#if defined(__x86_64__) || defined(_M_X64)
+    return simde_mm_cvtsd_si64(simde_mm_set_sd(v)); // cvtsd2si reads MXCSR
+#else
+    return int64_t(std::nearbyint(v)); // reads FPCR
+#endif
+}
+
+inline int64_t PPCTruncToInt64(double v) noexcept
+{
+    if (__builtin_isnan(v) || v < -9223372036854775808.0)
+        return INT64_MIN;
+    return v >= 9223372036854775808.0 ? INT64_MAX : int64_t(v);
+}
+
+inline int32_t PPCTruncToInt32(double v) noexcept
+{
+    if (__builtin_isnan(v) || v <= -2147483649.0)
+        return INT32_MIN;
+    return v >= 2147483648.0 ? INT32_MAX : int32_t(v);
+}'''
 
 
 def write_if_changed(path, text):
@@ -272,14 +321,19 @@ def read(path):
     return open(path, encoding='utf-8').read()
 
 
-def patch_file(path, transform):
-    """Writes transform(original) to path. The original is kept next to it as .orig, for as
-    long as the file is still that original or its patched form: a checkout of another
-    version replaces the file, and that version becomes the original."""
+def patch_file(path, transform, marker):
+    """Writes transform(original) to path. The original is kept next to it as .orig. A file
+    without marker (text only our patch adds) is an original: a checkout of another version
+    replaces the file, and that version becomes the original. A file with it is patched, by
+    this script or an older version of it, and is redone from .orig."""
     orig = path + '.orig'
     current = read(path)
-    if not os.path.exists(orig) or current not in (read(orig), transform(read(orig))):
-        shutil.copyfile(path, orig)
+    if marker not in current:
+        if not os.path.exists(orig) or read(orig) != current:
+            shutil.copyfile(path, orig)
+    elif not os.path.exists(orig):
+        sys.exit(f'{path} is already patched and its .orig is missing: restore the file from '
+                 'XenonRecomp\'s git (git checkout -- <file>) and run again.')
     if write_if_changed(path, transform(read(orig))):
         print('patched', path)
 
@@ -290,16 +344,19 @@ def patch_context_text(s):
 
 
 def patch_recompiler_text(s):
-    for needle in (ANCHOR, OLD_VCMPBFP, OLD_BDNZF, OLD_MFTB):
+    for needle in (ANCHOR, OLD_VCMPBFP, OLD_BDNZF, OLD_MFTB, OLD_FCTID, OLD_FCTIDZ, OLD_FCTIWZ, OLD_SWITCH):
         assert s.count(needle) == 1, needle[:60]
     s = s.replace(OLD_VCMPBFP, '').replace(OLD_BDNZF, NEW_BDNZF).replace(OLD_MFTB, NEW_MFTB)
+    s = s.replace(OLD_FCTID, NEW_FCTID).replace(OLD_FCTIDZ, NEW_FCTIDZ).replace(OLD_FCTIWZ, NEW_FCTIWZ)
+    s = s.replace(OLD_SWITCH, NEW_SWITCH)
     return s.replace(ANCHOR, NEW_CASES + ANCHOR)
 
 
 def patch(path):
     """Patches recompiler.cpp at path (and XenonUtils/ppc_context.h next to it)."""
-    patch_file(path, patch_recompiler_text)
-    patch_file(os.path.join(os.path.dirname(path), '..', 'XenonUtils', 'ppc_context.h'), patch_context_text)
+    patch_file(path, patch_recompiler_text, '// ---- DAO additions')
+    patch_file(os.path.join(os.path.dirname(path), '..', 'XenonUtils', 'ppc_context.h'), patch_context_text,
+               'PPCQueryTimebase')
 
 
 def main():
