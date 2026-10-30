@@ -22,6 +22,9 @@ struct Values {
   std::atomic<bool> frame_generation{false};      // dao_frame_generation
   std::atomic<int32_t> anisotropic_override{-1};  // anisotropic_override
   std::atomic<int32_t> motion_blur{0};            // dao_motion_blur
+  // dao_depth_of_field (default true, as Settings and the cvar have); F8 toggles
+  // it too (DAORecomp/main.cpp), not saved.
+  std::atomic<bool> depth_of_field{true};
   std::atomic<double> hdr_paper_white{200.0};     // present_hdr_paper_white
   std::atomic<double> hdr_peak{1000.0};           // present_hdr_peak
   std::atomic<double> neural_strength{1.0};       // dao_neural_strength
@@ -33,6 +36,13 @@ struct Values {
   // A copy of the frame rate (the setting or the in-game hotkey's), 0
   // unlimited (DAORecomp/gpu/video.cpp, every frame).
   std::atomic<int32_t> frame_rate{0};
+  // Not settings: whether the game is in a conversation or a cutscene (its
+  // own shots), and the main camera's vertical field of view in radians (0
+  // none), as the game's camera update last set them (DAORecomp/gpu/
+  // camera_fov.cpp, each frame it runs; they stay as they were while it
+  // doesn't, as in loads, which aren't upscaled), for depth of field.
+  std::atomic<bool> camera_shot{false};
+  std::atomic<float> camera_fov{0.0f};
 };
 
 inline Values values;

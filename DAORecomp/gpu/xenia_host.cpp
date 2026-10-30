@@ -42,6 +42,7 @@ DECLARE_double(dao_neural_strength);
 DECLARE_bool(dao_neural_frame_rate_guard);
 DECLARE_int32(anisotropic_override);
 DECLARE_int32(dao_motion_blur);
+DECLARE_bool(dao_depth_of_field);
 DECLARE_int32(dao_low_latency);
 DECLARE_double(present_hdr_paper_white);
 DECLARE_double(present_hdr_peak);
@@ -56,6 +57,12 @@ namespace dao::gpu
         std::unique_ptr<xe::ui::Win32WindowedAppContext> s_appContext;
 
         std::unique_ptr<xe::ui::Window> s_window;
+        // The window's fullscreen as last asked for (the window itself changes on the
+        // UI thread, later): F11 and the Graphics menu read it from other threads.
+        // s_fullscreenMutex keeps the requests reaching the UI thread in the order
+        // they were stored in.
+        std::atomic<bool> s_fullscreen{ false };
+        std::mutex s_fullscreenMutex;
         std::unique_ptr<xe::gpu::d3d12::D3D12GraphicsSystem> s_graphics;
         std::recursive_mutex s_interruptMutex;
 
@@ -145,6 +152,7 @@ namespace dao::gpu
         live.frame_generation = cvars::dao_frame_generation;
         live.anisotropic_override = cvars::anisotropic_override;
         live.motion_blur = cvars::dao_motion_blur;
+        live.depth_of_field = cvars::dao_depth_of_field;
         live.hdr_paper_white = cvars::present_hdr_paper_white;
         live.hdr_peak = cvars::present_hdr_peak;
         live.neural_strength = cvars::dao_neural_strength;
@@ -202,6 +210,7 @@ namespace dao::gpu
                 ready.set_value(false);
                 return;
             }
+            s_fullscreen.store(settings.fullscreen, std::memory_order_relaxed);
             if (settings.fullscreen)
                 s_window->SetFullscreen(true);
             else
@@ -266,6 +275,8 @@ namespace dao::gpu
     {
         if (!s_window)
             return;
+        std::lock_guard lock(s_fullscreenMutex);
+        s_fullscreen.store(fullscreen, std::memory_order_relaxed);
         s_appContext->CallInUIThread([fullscreen] {
             if (s_window->IsFullscreen() == fullscreen)
                 return;
@@ -278,6 +289,11 @@ namespace dao::gpu
                     settings.windowHeight);
             }
         });
+    }
+
+    bool XeniaFullscreen()
+    {
+        return s_fullscreen.load(std::memory_order_relaxed);
     }
 
     void XeniaSetOutputScaling(Upscaler upscaler, float sharpness)

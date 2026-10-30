@@ -13,6 +13,9 @@ x86-64 Windows program, with a Direct3D 12 renderer based on Xenia's. It adds:
 - neural rendering on AMD RDNA 4 (experimental): lmxxf's open-source port of DLSS 5's
   neural rendering, built in, with the network's weights from your download of
   lmxxf's package (they're NVIDIA's, and not included)
+- depth of field in conversations (and, it seems, cutscenes), from the scene's depth,
+  with temporal upscaling: the people nearest the camera sharp, the scene behind them
+  blurred, as a film camera's lens does
 - HDR output: on an HDR display the 3D scenes are rendered in HDR (the game's
   tonemapping redone without compressing its highlights), upscaled in HDR;
   HDR quality High keeps it 16-bit scRGB all the way to the display
@@ -39,6 +42,16 @@ x86-64 Windows program, with a Direct3D 12 renderer based on Xenia's. It adds:
 **This repository contains no game code or data.** You need your own copy of the
 game: an ISO image of the Xbox 360 disc. The installer extracts it, translates the
 game's code to C++ on your computer, and builds the program.
+
+## Screenshots
+
+<p>
+  <img src="docs/screenshots/title-screen.webp" width="49%" alt="The game's title screen">
+  <img src="docs/screenshots/launcher-configure.webp" width="49%" alt="The launcher's Configure page: rendering resolution and temporal upscaling">
+</p>
+<p>
+  <img src="docs/screenshots/photo-mode.webp" width="49%" alt="Photo mode with a 21:9 frame">
+</p>
 
 ## Installing
 
@@ -230,7 +243,11 @@ Most graphics settings can also be changed in the game: *Options → Graphics*. 
 apply at once; when you leave the menu, the game lists the ones that take effect
 the next time it starts. Turning off dynamic shadows and post-processing there (or in the
 launcher) makes the game faster on low-power devices such as the Steam Deck. Motion
-blur is off by default; Low and High cost GPU time while the scene moves.
+blur is off by default; Low and High cost GPU time while the scene moves. Depth of field
+in conversations is on by default; it costs GPU time in conversations and cutscenes only
+(about 0.85 ms a frame at 4K on an RX 9070 XT, by the GPU timing's "depth of field" mark).
+F11 switches between fullscreen and a window until the game is closed; changing
+*Fullscreen* in the Graphics tab saves the choice, F11 alone doesn't.
 
 **Low latency** (*Configure → Display → Frame rate* in the launcher, or *Options →
 Graphics*, where it applies at once) turns on AMD Radeon Anti-Lag 2 on AMD GPUs with a

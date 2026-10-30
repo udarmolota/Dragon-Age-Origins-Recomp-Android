@@ -94,6 +94,15 @@ test, vertex XY format and clipping state to distinguish those draws.
 Compare the ratio against the same walk with the effect off (`walk.txt` gives the same
 walk each time); it also lists the frames and blocks most like a one-frame flash.
 
+## Depth of field
+
+`xenia.dao_show_depth_of_field=true` shows depth of field's blur instead of the scene
+(red behind the focus, blue in front of it), and `xenia.dao_depth_of_field_always=true`
+turns it on in every 3D scene, not only conversations, for testing it anywhere (both with
+`video.depth_of_field` on). `xenia.dao_depth_of_field_scale` (0.25 to 4, default 1)
+scales the blur's size, for tuning. In game, F8 turns it off and on (not saved), to
+compare. Its GPU time is the "depth of field" mark of `DAO_GPU_TIMING=1`.
+
 ## Launcher and installer
 
 - `fake_steam.py <folder>`: a fake Steam for *Add to Steam* (with `DAO_STEAM_ROOT`, below);
