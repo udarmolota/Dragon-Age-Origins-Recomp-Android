@@ -1,4 +1,4 @@
-"""Adds the PPC/VMX128 instructions DAO needs to XenonRecomp's recompiler.cpp.
+"""Adds the PPC/VMX128 instructions our games need to XenonRecomp and fixes what it gets wrong.
 
 Idempotent: run against a pristine recompiler.cpp (keeps a .orig backup).
 usage: patch_recompiler.py <path to XenonRecomp/XenonRecomp/recompiler.cpp>
@@ -224,6 +224,128 @@ NEW_CASES = r'''
         }
         break;
 
+    // From the State of Decay port. Semantics follow Xenia's PPC frontend (ppc_emit_*.cc). Vector registers are held
+    // element-reversed (guest element i of a word vector is host u32[3 - i]).
+
+    case PPC_INST_LDUX:
+    case PPC_INST_STFDUX:
+        println("\t{} = {}.u32 + {}.u32;", ea(), r(insn.operands[1]), r(insn.operands[2]));
+        if (insn.opcode->id == PPC_INST_LDUX)
+        {
+            println("\t{}.u64 = PPC_LOAD_U64({});", r(insn.operands[0]), ea());
+        }
+        else
+        {
+            printSetFlushMode(false);
+            println("\tPPC_STORE_U64({}, {}.u64);", ea(), f(insn.operands[0]));
+        }
+        println("\t{}.u32 = {};", r(insn.operands[1]), ea());
+        break;
+
+    case PPC_INST_LHBRX:
+        print("\t{}.u64 = __builtin_bswap16(PPC_LOAD_U16(", r(insn.operands[0]));
+        if (insn.operands[1] != 0)
+            print("{}.u32 + ", r(insn.operands[1]));
+        println("{}.u32));", r(insn.operands[2]));
+        break;
+
+    case PPC_INST_STVEBX:
+        // NOTE: accounting for the full vector reversal here
+        print("\t{} = ", ea());
+        if (insn.operands[1] != 0)
+            print("{}.u32 + ", r(insn.operands[1]));
+        println("{}.u32;", r(insn.operands[2]));
+        println("\tPPC_STORE_U8({}, {}.u8[15 - ({} & 0xF)]);", ea(), v(insn.operands[0]), ea());
+        break;
+
+    case PPC_INST_FCTIW:
+        // Current rounding mode, saturating (PPCRoundToInt32 in ppc_context.h).
+        printSetFlushMode(false);
+        println("\t{}.s64 = PPCRoundToInt32({}.f64);", f(insn.operands[0]), f(insn.operands[1]));
+        break;
+
+    case PPC_INST_FNMADD:
+        // As XenonRecomp's other multiply-adds: not fused.
+        printSetFlushMode(false);
+        println("\t{}.f64 = -({}.f64 * {}.f64 + {}.f64);", f(insn.operands[0]), f(insn.operands[1]), f(insn.operands[2]), f(insn.operands[3]));
+        break;
+
+    case PPC_INST_MULHD:
+        println("\t{}.s64 = int64_t((__int128({}.s64) * __int128({}.s64)) >> 64);", r(insn.operands[0]), r(insn.operands[1]), r(insn.operands[2]));
+        if (strchr(insn.opcode->name, '.'))
+            println("\t{}.compare<int64_t>({}.s64, 0, {});", cr(0), r(insn.operands[0]), xer());
+        break;
+
+    case PPC_INST_MULHDU:
+        println("\t{}.u64 = uint64_t((static_cast<unsigned __int128>({}.u64) * static_cast<unsigned __int128>({}.u64)) >> 64);", r(insn.operands[0]), r(insn.operands[1]), r(insn.operands[2]));
+        if (strchr(insn.opcode->name, '.'))
+            println("\t{}.compare<int64_t>({}.s64, 0, {});", cr(0), r(insn.operands[0]), xer());
+        break;
+
+    case PPC_INST_VMINSW:
+        println("\tsimde_mm_store_si128((simde__m128i*){}.u32, simde_mm_min_epi32(simde_mm_load_si128((simde__m128i*){}.u32), simde_mm_load_si128((simde__m128i*){}.u32)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
+        break;
+
+    case PPC_INST_VSUBUWM:
+        println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_sub_epi32(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
+        break;
+
+    case PPC_INST_VPKSHSS:
+    case PPC_INST_VPKSHSS128:
+        // vA's halfwords go to the guest's high half (host bytes 8-15), as in vpkshus.
+        println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_packs_epi16(simde_mm_load_si128((simde__m128i*){}.s16), simde_mm_load_si128((simde__m128i*){}.s16)));", v(insn.operands[0]), v(insn.operands[2]), v(insn.operands[1]));
+        break;
+
+    case PPC_INST_VCMPGTUW:
+        println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_cmpgt_epu32(simde_mm_load_si128((simde__m128i*){}.u32), simde_mm_load_si128((simde__m128i*){}.u32)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
+        if (strchr(insn.opcode->name, '.'))
+            println("\t{}.setFromMask(simde_mm_load_ps({}.f32), 0xF);", cr(6), v(insn.operands[0]));
+        break;
+
+    case PPC_INST_VCMPGTSW:
+        println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_cmpgt_epi32(simde_mm_load_si128((simde__m128i*){}.u32), simde_mm_load_si128((simde__m128i*){}.u32)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
+        if (strchr(insn.opcode->name, '.'))
+            println("\t{}.setFromMask(simde_mm_load_ps({}.f32), 0xF);", cr(6), v(insn.operands[0]));
+        break;
+
+    case PPC_INST_VAVGSW:
+        // (a + b + 1) >> 1 without overflow
+        for (size_t i = 0; i < 4; i++)
+            println("\t{}.s32[{}] = int32_t((int64_t({}.s32[{}]) + int64_t({}.s32[{}]) + 1) >> 1);", v(insn.operands[0]), i, v(insn.operands[1]), i, v(insn.operands[2]), i);
+        break;
+
+    case PPC_INST_VSLH:
+        for (size_t i = 0; i < 8; i++)
+            println("\t{}.u16[{}] = {}.u16[{}] << ({}.u16[{}] & 0xF);", v(insn.operands[0]), i, v(insn.operands[1]), i, v(insn.operands[2]), i);
+        break;
+
+    case PPC_INST_VSRH:
+        for (size_t i = 0; i < 8; i++)
+            println("\t{}.u16[{}] = {}.u16[{}] >> ({}.u16[{}] & 0xF);", v(insn.operands[0]), i, v(insn.operands[1]), i, v(insn.operands[2]), i);
+        break;
+
+    case PPC_INST_VRLW128:
+        for (size_t i = 0; i < 4; i++)
+            println("\t{}.u32[{}] = __builtin_rotateleft32({}.u32[{}], {}.u32[{}] & 0x1F);", v(insn.operands[0]), i, v(insn.operands[1]), i, v(insn.operands[2]), i);
+        break;
+
+    case PPC_INST_VSL:
+        // Whole-register shift left by vB's last byte & 7 bits. The reversed layout makes
+        // the host's little-endian 128-bit value the guest's big-endian one.
+        println("\t{}.u32 = {}.u8[0] & 0x7;", temp(), v(insn.operands[2]));
+        println("\t{0}.u64[1] = ({1}.u64[1] << {2}.u32) | ({2}.u32 ? {1}.u64[0] >> (64 - {2}.u32) : 0);", vTemp(), v(insn.operands[1]), temp());
+        println("\t{}.u64[0] = {}.u64[0] << {}.u32;", vTemp(), v(insn.operands[1]), temp());
+        println("\t{} = {};", v(insn.operands[0]), vTemp());
+        break;
+
+    case PPC_INST_VSLO:
+    case PPC_INST_VSLO128:
+        // Whole-register shift left by (vB's last byte >> 3) & 0xF bytes.
+        println("\t{}.u32 = ({}.u8[0] >> 3) & 0xF;", temp(), v(insn.operands[2]));
+        println("\tfor (uint32_t i = 0; i < 16; i++) {}.u8[i] = i >= {}.u32 ? {}.u8[i - {}.u32] : 0;", vTemp(), temp(), v(insn.operands[1]), temp());
+        println("\t{} = {};", v(insn.operands[0]), vTemp());
+        break;
+
 '''
 
 OLD_VCMPBFP = '''    case PPC_INST_VCMPBFP:
@@ -268,6 +390,92 @@ NEW_FCTIWZ = '''        println("\\t{}.s64 = PPCTruncToInt32({}.f64);", f(insn.o
 OLD_SWITCH = '''            println("\\tswitch ({}.u64) {{", r(switchTable->second.r));'''
 NEW_SWITCH = '''            println("\\tswitch ({}.u32) {{", r(switchTable->second.r));'''
 
+# The disassembler's default dialect includes PPC403/405, whose multiply-accumulate
+# entries (opcode 4) come before the VMX128 ones in its table: State of Decay's three
+# `vsldoi128 vD,vA,vB,12` words (VX128_5 form, bit 0x10 set) decoded as `mullhwu.`.
+# Xenon has no 403/405 instructions; drop them from the "cell" (Xenon) dialect.
+DIALECT_OLD = '''        dialect |= PPC_OPCODE_POWER4 | PPC_OPCODE_CELL | PPC_OPCODE_ALTIVEC | PPC_OPCODE_VMX_128;
+'''
+DIALECT_NEW = '''    {
+        dialect |= PPC_OPCODE_POWER4 | PPC_OPCODE_CELL | PPC_OPCODE_ALTIVEC | PPC_OPCODE_VMX_128;
+        dialect &= ~PPC_OPCODE_403; // Xenon: opcode 4 is VMX/VMX128, never 403/405 multiply-accumulate
+    }
+'''
+
+# Record forms XenonRecomp ignored (it warned "RC bit enabled but no comparison").
+RLWIMI_OLD = '''        println("\\t{}.u64 = (__builtin_rotateleft32({}.u32, {}) & 0x{:X}) | ({}.u64 & 0x{:X});", r(insn.operands[0]), r(insn.operands[1]), insn.operands[2], mask, r(insn.operands[0]), ~mask);
+'''
+RLWIMI_NEW = RLWIMI_OLD + '''        if (strchr(insn.opcode->name, '.'))
+            println("\\t{}.compare<int32_t>({}.s32, 0, {});", cr(0), r(insn.operands[0]), xer());
+'''
+RLDICL_OLD = '''        println("\\t{}.u64 = __builtin_rotateleft64({}.u64, {}) & 0x{:X};", r(insn.operands[0]), r(insn.operands[1]), insn.operands[2], ComputeMask(insn.operands[3], 63));
+'''
+RLDICL_NEW = RLDICL_OLD + '''        if (strchr(insn.opcode->name, '.'))
+            println("\\t{}.compare<int64_t>({}.s64, 0, {});", cr(0), r(insn.operands[0]), xer());
+'''
+
+# vupkd3d128: FLOAT16_2 (type 3) and FLOAT16_4 (type 5), after the existing NORMSHORT2.
+# The packed data is in the guest's last word(s): FLOAT16_2 x = high half of word 3,
+# y = low half, z = 0, w = 1; FLOAT16_4 x..w = halfwords 4..7 (host u16[3..0]).
+UPK_OLD = '''            println("\\t{}.f32[1] = 0.0f;", vTemp());
+            println("\\t{}.f32[0] = 1.0f;", vTemp());
+            println("\\t{} = {};", v(insn.operands[0]), vTemp());
+            break;
+'''
+UPK_NEW = UPK_OLD + '''
+        case 3: // float16_2
+            println("\\t{}.f32[3] = PPCHalfToFloat({}.u16[1]);", vTemp(), v(insn.operands[1]));
+            println("\\t{}.f32[2] = PPCHalfToFloat({}.u16[0]);", vTemp(), v(insn.operands[1]));
+            println("\\t{}.f32[1] = 0.0f;", vTemp());
+            println("\\t{}.f32[0] = 1.0f;", vTemp());
+            println("\\t{} = {};", v(insn.operands[0]), vTemp());
+            break;
+
+        case 5: // float16_4
+            for (size_t i = 0; i < 4; i++)
+                println("\\t{}.f32[{}] = PPCHalfToFloat({}.u16[{}]);", vTemp(), i, v(insn.operands[1]), i);
+            println("\\t{} = {};", v(insn.operands[0]), vTemp());
+            break;
+'''
+
+# vpkd3d128 FLOAT16_2 (type 3), packed into one word like D3DCOLOR (pack 1: word
+# operands[4] counted from the host's end) with float16_4's conversion: x in the high half.
+PK_OLD = '''        		println("\\t{}.u16[{}] |= (({}.u32[{}]&0x80000000)>>16);", v(insn.operands[0]), i+(2*insn.operands[4]), v(insn.operands[1]), i);
+            }
+            break;
+'''
+PK_NEW = PK_OLD + '''
+        case 3: // float16_2
+            if (insn.operands[3] != 1)
+                fmt::println("Unexpected float16_2 pack instruction at {:X}", base);
+
+            for (size_t i = 2; i < 4; i++)
+            {
+                println("\\t{}.u32 = ({}.u32[{}]&0x7FFFFFFF);", temp(), v(insn.operands[1]), i);
+                println("\\t{0}.u8[0] = ({1}.f32 != {1}.f32) || ({1}.f32 > 65504.0f) ? 0xFF : (({2}.u32[{3}]&0x7f800000)>>23);", vTemp(), temp(), v(insn.operands[1]), i);
+                println("\\t{}.u16 = {}.u8[0] != 0xFF ? (({}.u32[{}]&0x7FE000)>>13) : 0x0;", temp(), vTemp(), v(insn.operands[1]), i);
+                println("\\t{0}.u16[{1}] = {2}.u8[0] != 0xFF ? ({2}.u8[0] > 0x70 ? ((({2}.u8[0]-0x70)<<10)+{3}.u16) : (0x71-{2}.u8[0] > 31 ? 0x0 : ((0x400+{3}.u16)>>(0x71-{2}.u8[0])))) : 0x7FFF;", v(insn.operands[0]), (i - 2) + (2 * insn.operands[4]), vTemp(), temp());
+                println("\\t{}.u16[{}] |= (({}.u32[{}]&0x80000000)>>16);", v(insn.operands[0]), (i - 2) + (2 * insn.operands[4]), v(insn.operands[1]), i);
+            }
+            break;
+'''
+
+
+# blrl was a debug trap. State of Decay's one (0x83620FCC, the CRT helper that calls a C++ catch
+# funclet: mtlr r3; blrl) becomes an indirect call through the old LR, as bctrl does.
+BLRL_OLD = '''    case PPC_INST_BLRL:
+        println("__builtin_debugtrap();");
+        break;
+'''
+BLRL_NEW = '''    case PPC_INST_BLRL:
+        println("\\t{}.u32 = ctx.lr;", temp());
+        if (!config.skipLr)
+            println("\\tctx.lr = 0x{:X};", base + 4);
+        println("\\tPPC_CALL_INDIRECT_FUNC({}.u32);", temp());
+        csrState = CSRState::Unknown; // the call could change it
+        break;
+'''
+
 # ...which the runtime provides through this hook in the generated ppc_context.h.
 CONTEXT_ANCHOR = '#define PPC_MEMORY_SIZE 0x100000000ull'
 CONTEXT_ADDITION = '''#define PPC_MEMORY_SIZE 0x100000000ull
@@ -294,6 +502,14 @@ inline int64_t PPCRoundToInt64(double v) noexcept
 #endif
 }
 
+inline int32_t PPCRoundToInt32(double v) noexcept
+{
+    if (__builtin_isnan(v))
+        return INT32_MIN;
+    int64_t r = PPCRoundToInt64(v); // exact below 2^63, saturated beyond
+    return r > INT32_MAX ? INT32_MAX : r < INT32_MIN ? INT32_MIN : int32_t(r);
+}
+
 inline int64_t PPCTruncToInt64(double v) noexcept
 {
     if (__builtin_isnan(v) || v < -9223372036854775808.0)
@@ -306,6 +522,41 @@ inline int32_t PPCTruncToInt32(double v) noexcept
     if (__builtin_isnan(v) || v <= -2147483649.0)
         return INT32_MIN;
     return v >= 2147483648.0 ? INT32_MAX : int32_t(v);
+}
+
+inline simde__m128i simde_mm_cmpgt_epu32(simde__m128i a, simde__m128i b)
+{
+    simde__m128i c = simde_mm_set1_epi32(int(0x80000000));
+    return simde_mm_cmpgt_epi32(simde_mm_xor_si128(a, c), simde_mm_xor_si128(b, c));
+}
+
+// IEEE 754 binary16 to float, as Xenia's vupkd3d128 FLOAT16 unpack (F16C): exponent 31
+// is infinity/NaN, denormals are exact.
+inline float PPCHalfToFloat(uint16_t h) noexcept
+{
+    uint32_t sign = uint32_t(h & 0x8000) << 16;
+    uint32_t exponent = (h >> 10) & 0x1F;
+    uint32_t mantissa = h & 0x3FF;
+    uint32_t bits;
+    if (exponent == 0x1F)
+        bits = sign | 0x7F800000 | (mantissa << 13);
+    else if (exponent != 0)
+        bits = sign | ((exponent + 112) << 23) | (mantissa << 13);
+    else if (mantissa == 0)
+        bits = sign;
+    else
+    {
+        exponent = 113;
+        while (!(mantissa & 0x400))
+        {
+            mantissa <<= 1;
+            exponent--;
+        }
+        bits = sign | (exponent << 23) | ((mantissa & 0x3FF) << 13);
+    }
+    float f;
+    memcpy(&f, &bits, sizeof(f));
+    return f;
 }'''
 
 
@@ -344,19 +595,29 @@ def patch_context_text(s):
 
 
 def patch_recompiler_text(s):
-    for needle in (ANCHOR, OLD_VCMPBFP, OLD_BDNZF, OLD_MFTB, OLD_FCTID, OLD_FCTIDZ, OLD_FCTIWZ, OLD_SWITCH):
+    for needle in (ANCHOR, OLD_VCMPBFP, OLD_BDNZF, OLD_MFTB, OLD_FCTID, OLD_FCTIDZ, OLD_FCTIWZ, OLD_SWITCH,
+                   RLWIMI_OLD, RLDICL_OLD, UPK_OLD, PK_OLD, BLRL_OLD):
         assert s.count(needle) == 1, needle[:60]
     s = s.replace(OLD_VCMPBFP, '').replace(OLD_BDNZF, NEW_BDNZF).replace(OLD_MFTB, NEW_MFTB)
     s = s.replace(OLD_FCTID, NEW_FCTID).replace(OLD_FCTIDZ, NEW_FCTIDZ).replace(OLD_FCTIWZ, NEW_FCTIWZ)
     s = s.replace(OLD_SWITCH, NEW_SWITCH)
+    s = s.replace(RLWIMI_OLD, RLWIMI_NEW).replace(RLDICL_OLD, RLDICL_NEW).replace(BLRL_OLD, BLRL_NEW)
+    s = s.replace(UPK_OLD, UPK_NEW).replace(PK_OLD, PK_NEW)
     return s.replace(ANCHOR, NEW_CASES + ANCHOR)
 
 
+def patch_disasm_text(s):
+    assert s.count(DIALECT_OLD) == 1, 'disasm dialect'
+    return s.replace(DIALECT_OLD, DIALECT_NEW)
+
+
 def patch(path):
-    """Patches recompiler.cpp at path (and XenonUtils/ppc_context.h next to it)."""
+    """Patches recompiler.cpp at path (and XenonUtils/ppc_context.h, thirdparty/disasm/ppc-dis.c)."""
     patch_file(path, patch_recompiler_text, '// ---- DAO additions')
     patch_file(os.path.join(os.path.dirname(path), '..', 'XenonUtils', 'ppc_context.h'), patch_context_text,
                'PPCQueryTimebase')
+    patch_file(os.path.join(os.path.dirname(path), '..', 'thirdparty', 'disasm', 'ppc-dis.c'), patch_disasm_text,
+               'never 403/405')
 
 
 def main():
