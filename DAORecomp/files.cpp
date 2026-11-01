@@ -2,6 +2,11 @@
 #include "files.h"
 
 #include <fstream>
+#include <thread>
+
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 #include "text.h"
 
@@ -51,7 +56,14 @@ namespace dao
 
     bool WriteFileAtomically(const std::filesystem::path& path, std::string_view data)
     {
-        const std::filesystem::path part = std::filesystem::path(path).concat(".part");
+        // (Of this thread: two writing the same file don't share one.)
+#ifdef _WIN32
+        const std::filesystem::path part = std::filesystem::path(path).concat(
+            L"." + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetCurrentThreadId()) + L".part");
+#else
+        const std::filesystem::path part = std::filesystem::path(path).concat(
+            "." + std::to_string(getpid()) + "-" + std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id())) + ".part");
+#endif
         bool written = false;
         {
             std::ofstream out(part, std::ios::binary | std::ios::trunc);

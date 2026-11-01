@@ -25,17 +25,13 @@ struct Values {
   // dao_depth_of_field (default true, as Settings and the cvar have); F8 toggles
   // it too (DAORecomp/main.cpp), not saved.
   std::atomic<bool> depth_of_field{true};
+  // Texture packs' images in use; F9 (DAORecomp/main.cpp, and its test hook
+  // DAO_TEXTURE_PACKS_TOGGLE_AT) shows the game's own instead, to compare;
+  // not saved.
+  std::atomic<bool> texture_packs_shown{true};
   std::atomic<double> hdr_paper_white{200.0};     // present_hdr_paper_white
   std::atomic<double> hdr_peak{1000.0};           // present_hdr_peak
-  std::atomic<double> neural_strength{1.0};       // dao_neural_strength
   std::atomic<int32_t> low_latency{0};            // dao_low_latency
-  // dao_neural_frame_rate_guard (default true, as Settings and the cvar have)
-  std::atomic<bool> neural_frame_rate_guard{true};
-  // Not a setting: F6 pauses neural rendering and resumes it (DAORecomp/main.cpp).
-  std::atomic<bool> neural_paused{false};
-  // A copy of the frame rate (the setting or the in-game hotkey's), 0
-  // unlimited (DAORecomp/gpu/video.cpp, every frame).
-  std::atomic<int32_t> frame_rate{0};
   // Not settings: whether the game is in a conversation or a cutscene (its
   // own shots), and the main camera's vertical field of view in radians (0
   // none), as the game's camera update last set them (DAORecomp/gpu/

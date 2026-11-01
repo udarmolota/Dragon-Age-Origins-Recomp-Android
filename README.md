@@ -10,9 +10,6 @@ x86-64 Windows program, with a Direct3D 12 renderer based on Xenia's. It adds:
   objects), and optional FSR 3.1
   frame generation (a frame between each two, for a display at twice the frame rate;
   only real frames are shown on one that can't keep up)
-- neural rendering on AMD RDNA 4 (experimental): lmxxf's open-source port of DLSS 5's
-  neural rendering, built in, with the network's weights from your download of
-  lmxxf's package (they're NVIDIA's, and not included)
 - depth of field in conversations (and, it seems, cutscenes), from the scene's depth,
   with temporal upscaling: the people nearest the camera sharp, the scene behind them
   blurred, as a film camera's lens does
@@ -35,7 +32,8 @@ x86-64 Windows program, with a Direct3D 12 renderer based on Xenia's. It adds:
   game, or F7): the developers' own debug scripts, still in the game, for immortality,
   skill checks, gold, experience and more
 - an on-screen keyboard for naming characters, usable with a gamepad
-- the downloadable content (Awakening and the rest), installed from your own packages
+- the downloadable content (Awakening and the rest), installed from the Ultimate Edition's
+  second disc or your own packages
 - the game's text in English, Italian or Spanish (the languages on the disc; the voices
   are English in each), chosen in the launcher
 
@@ -75,7 +73,8 @@ You need:
 
 Download **DAORecomp.exe** from the releases and run it: it opens on its Install page,
 drawn like the launcher (with the title screen from your disc once you pick it). Pick the
-ISO and an install folder, accept the build tools license, and press **Install**.
+ISO, your downloadable content if you have it (see below), and an install folder, accept
+the build tools license, and press **Install**.
 Nothing else needs to be installed first: it downloads what it needs (including a
 portable git if you have none). It builds the game into the install folder as a new
 `DAORecomp.exe`, which then opens as the launcher: **Play** starts the game. It can also
@@ -97,27 +96,53 @@ Windows may warn about `DAORecomp.exe` because it isn't code-signed (*More info*
 #### Title updates and downloadable content
 
 *Awakening*, *Leliana's Song*, *The Darkspawn Chronicles*, *The Golems of Amgarrak* and
-*Witch Hunt* need the game's Title Update 6 or 7 (the other DLC work without it; 7, the
-last, adds fixes to 6's in its data files). To use them,
-copy the title update's package and the DLC packages from a console (or your backup of
-them) and:
+*Witch Hunt* also need the game's Title Update 6 or 7 (the other DLC work without it).
 
-- give the installer the title update's package: *Title Update 6 or 7 (optional)* in the
-  window, or `--title-update <package>`. It is checked (it must be the one for the
-  English, Italian and Spanish disc, media ID 186A1115), extracted to `title_update/` in the install folder,
-  and the game's code is translated a second time from the updated executable (about as
-  long again). The program then holds both versions and runs the updated one while
-  `title_update/` is there.
-- drop the DLC packages, or the folder holding them, on the launcher window. They are
-  extracted to `userdata/content/454108C0/00000002/`, where the game finds them. A title
-  update dropped there is installed too (7 replaces 6); if the program was built without
-  one, it takes effect after running the installer again on the same folder.
+Where they are:
 
-Only packages in the read-only format Xbox Live delivers them in (LIVE/PIRS) are read;
-the packages themselves are left as they are. At start, `title_update/default.xexp` is
-checked to be Title Update 6's or 7's; anything else is passed over for the disc's version.
-The launcher's *Downloadable Content* shows which DLC and title update are installed
-(and whether the game can use them), and packages can be dropped there too.
+- **Ultimate Edition:** everything is on disc 2, including Title Update 6. Use its disc
+  image as it is: there's nothing to extract.
+- **From a console:** copy the DLC from the hard drive's
+  `Content\0000000000000000\454108C0\00000002\` folder, and the title update from
+  `Content\0000000000000000\454108C0\000B0000\`.
+
+Each DLC is one file with a long name of letters and numbers and no extension, for
+example `35F2AA65A0CDDB099F21E3280F7CE1054B5E08024` (that one is *Leliana's Song*). That
+is normal; don't rename the files or add an extension.
+
+**When installing (easiest):** in the installer, choose them under *Downloadable content
+and title update*: disc 2's image, or the files copied from a console (*File...*), or the
+folder holding them (*Folder...*). You can also drop them on its window. The DLC are
+installed first, and the title update is built into the game, so there's nothing left
+to do. Installing without them, the installer first shows how to add them later.
+
+**Later:**
+
+1. Open the launcher, go to *Downloadable Content*, and drag disc 2's image, or the
+   files, or the folder holding them, onto the window. It shows each one as it's
+   installed.
+2. If you added a title update for the first time, run the installer (`DAORecomp.exe`
+   from the release page) again on the same install folder. The game is rebuilt once for the update, which takes about as long
+   as the first build. Going from 6 to 7 later doesn't need this.
+
+*Downloadable Content* then lists what's installed and whether the game can use it.
+
+Details:
+
+- The title update must be the one for the English, Italian and Spanish disc (media ID
+  186A1115); on Ultimate disc 2 that is `ESI\tu00000001_00000000`. The copies for the
+  French and German editions are passed over. 7, the last update, adds fixes to 6's in
+  its data files, and replaces 6 when dropped.
+- Given to the installer (in its window, or `--title-update <package>` on the command
+  line, which takes the title update's package only), the title update is extracted to
+  `title_update/` in the install folder, and the game's code is translated a second time
+  from the updated executable. The program then holds both versions and runs the
+  updated one while `title_update/` is there; at start, `title_update/default.xexp` is
+  checked to be Title Update 6's or 7's, and anything else is passed over for the disc's
+  version.
+- DLC are extracted to `userdata/content/454108C0/00000002/`, where the game finds them.
+  Only packages in the read-only format Xbox Live delivers them in (LIVE/PIRS) are read;
+  the files you drop are left as they are.
 
 ### Linux (or from the source on Windows)
 
@@ -187,13 +212,10 @@ Everything is pinned to exact versions and checked (`installer/deps.py`):
 
 The install folder gets the game files (`game/`), the program, `userdata/` (settings,
 saves, save backups, installed DLC, logs, the shader cache, and the Options menu it
-generates), `mods/`, and with the title update, `title_update/`. On a PC with an AMD
-RDNA 4 GPU (Radeon RX 9000 series) and AMD's driver, it also gets `neural/`: neural
-rendering's GPU kernels, compiled for that GPU during the install by the driver's own
-compiler (`amd_comgr_3.dll`; a minute or two the first time, and again after a driver
-update), and the shaders it compiles, and `DLSS5-AMD/`: its settings and logs. An install
-on a PC without such a GPU removes an earlier install's kernels and shaders (your own
-files there stay; if AMD's driver can't say which GPU it is, they stay too).
+generates), `mods/`, and with the title update, `title_update/`. Installing over an
+earlier version removes the neural rendering files it installed (`LmxxfNrRuntime.dll`,
+the kernels and shaders in `neural/`, `DLSS5-AMD/default-config.txt` and its logs, and
+lmxxf's license files); files you added there stay.
 
 When you save over a save, the version it replaces is kept in
 `userdata/save_backups/`: one per save, the one before its latest overwrite (a save
@@ -275,42 +297,6 @@ where it can't run (no RTX GPU, an upscaling ratio beyond what DLSS's modes cove
 exactly the installer's, and downloads nothing while it runs; NVIDIA's driver may use a
 newer DLSS it already has.
 
-**Neural rendering (experimental, AMD RDNA 4 only):** the 3D scenes go through the
-neural rendering network of NVIDIA's DLSS 5 before temporal upscaling, run on AMD's
-GPUs by [lmxxf's port](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting) (MIT),
-built from its source into `LmxxfNrRuntime.dll`. The network's weights are NVIDIA's and
-don't come with the game: download lmxxf's release package (linked from its README), then
-in the launcher's *Configure → Graphics* turn on *Neural rendering* and choose the
-package's folder with *Browse* (its folder with `block0-ffn.f16` is searched for, four
-levels down at most; if it isn't found, choose that folder itself). The option
-is there when the install has its kernels (installed on a PC with an RX 9000 series GPU:
-install again after changing to one), and needs temporal upscaling on. It's expensive: lmxxf
-measures about 7 ms of GPU time a frame for its 900-line network and 9.5 ms for 1080
-lines on an RX 9070 XT. It works with HDR output too (the network gets the scene in linear
-light, as DLSS 5 takes HDR, and the highlights above paper white keep their brightness),
-takes effect when the game starts, and loading the network holds the first frames (the logos)
-for a second or two.
-*Neural rendering strength* (also in *Options → Graphics*, where it applies at once)
-sets how much of the network's change of detail and colour is kept, from none (0, which skips
-the network: no GPU time for it, though it stays loaded; so does anything under 0.05) to all (1).
-The options lmxxf's packages have are there too (in both; they take effect when the game
-starts): *quality* is the network's size, which the 3D scenes are fitted to (Auto picks the
-smallest they fit: 720 lines at `resolution_scale = 1` and 1080 above; 900 and 720 are
-faster), *passes* runs the
-network two or three times a frame for a stronger look (each pass costs as much as the first;
-the third is predicted from the first two), *protect skin* keeps skin as the first pass made
-it, and *style* is one of NVIDIA's three (0 is NVIDIA's default, 1 lmxxf's). The installer
-puts lmxxf's settings template for this runtime in `DLSS5-AMD/default-config.txt`; these
-settings override it, and the runtime keeps its own logs in `DLSS5-AMD/logs`. Its problems
-are logged to `userdata/xenia.log`, and then it's off for the session. In the game, F6
-switches it off and back on at once, to compare, when it was on as the game started (the
-keyboard only, while the game's window is in front).
-*Ease off neural rendering to hold the frame rate* (on by default, in the launcher and in
-*Options → Graphics*, where it applies at once) fades the network out while the GPU can't hold
-the frame rate with it, and back in when the GPU has room for it again; `userdata/xenia.log`
-says when ("Frame rate guard"). It measures the GPU's time a frame, so it eases off only when
-the GPU is what holds the frames back, and does nothing with the frame rate unlimited.
-
 [OptiScaler](https://github.com/optiscaler/OptiScaler) can take over the temporal upscaling
 (as can unofficial forks of it, such as AMD-NR). It isn't included: copy its files next to
 `DAORecomp.exe` without replacing the `amd_fidelityfx_*.dll` files already there, rename
@@ -332,6 +318,49 @@ launcher also warns of what it finds in a mod that may not work on this version.
 first time the Mods page opens it explains this (`mods_warning_seen` in the
 `[launcher]` section of `userdata/config.toml` records that it was read). In the game,
 *Options → Graphics → Manage mods* closes it and opens the launcher's Mods page.
+
+PC texture packs (`.dds` files, such as *AP Neural Enhanced Diffusion Textures* on Nexus
+Mods) go in `texture packs/`, next to `game/` (in any folders inside it; the launcher's
+*Texture Packs* page turns them on and off, and its *Open the texture packs folder* makes
+and opens it), and aren't converted: each replaces the game's texture of the same name on the graphics card
+only, so the game keeps its own small copies in the 360's 512 MB and the pack's can be up
+to 16384 pixels wide (and 512 MB a file). The game matches the packs against its own
+textures the first time (a second or two, in the background; textures already on screen by
+then are replaced once it's done) and saves the results in
+`userdata/texture_pack_index.bin`, so later starts only check that no file (and not the
+size limit) changed. It
+loads the pack's files in the background as their textures appear, so a texture may
+sharpen a moment later. In the game, F9 switches between the packs' textures and the
+game's own, to compare (not saved).
+
+The launcher's *Texture Packs* page shows how many of each pack's files are used, and under *Files not used*, why the others aren't (*Check again* after changing the
+folder). The limits:
+
+- **Names:** a file replaces the game's texture of the same name, from the base game's
+  archives only: files made for the PC version's own textures (such as the `*__pal`
+  terrain palettes) and for DLC areas aren't used. It also replaces the game's copies of
+  that texture's picture under other names (the same size, smaller or larger: the half
+  and quarter size ones distant models use, terrain copies of props' textures, and the
+  like: about 1,500 pairs, listed
+  in `DAORecomp/gpu/texture_copies.inc` by `scripts/find_texture_copies.py`), loaded at
+  the copy's scale. Textures the console version re-laid out (such as the castle rugs'
+  `*_fixed` ones) aren't copies, and a pack needs files of their own names for them.
+- **Kinds:** the game's colour textures (DXT1, DXT3 or DXT5 on the 360) take DXT1, DXT3,
+  DXT5 or BC7 files, and its two-channel normal maps (DXN) take BC5 files. PC normal maps
+  saved as DXT5 don't fit those. Uncompressed textures, cube maps, and textures the game
+  draws into aren't replaced.
+- **Sizes:** not smaller than the game's texture, sides in multiples of 4, at most 16384
+  pixels a side and 512 MB a file.
+- **Mods and other packs:** where a mod replaces a texture, the mod's stays (the pack only
+  matches the game's own); where two packs have a file of the same name, the one in the
+  later folder (alphabetically) is used.
+
+On that page, *Size limit* (`texture_pack_max_size` in the `[video]` section) loads larger
+textures at that size, for the Steam Deck or cards with 4 GB or less, and *Memory*
+(`texture_pack_memory`, in MB) caps the graphics memory they take (*Automatic*,
+the default: half the graphics card's own, at least 256 MB). When it's full, the pack's
+textures not seen for a second go back to the game's to make room, and those that still
+don't fit stay the game's.
 
 Photo mode starts from the START menu's *Photo Mode* row (below *Achievements*, which
 stays greyed: there are no achievements here) or by clicking both sticks (L3+R3) while
@@ -379,11 +408,6 @@ are tested, and the traps found so far. The build details are below.
   once, or its `--prepare-only` step): among them the FidelityFX SDK and
   `tools/XeSS-SDK` (`installer/toolchain.py`'s `ensure_xess`) and `tools/Streamline-SDK`
   (`ensure_streamline`), whose DLLs are copied next to the exe.
-- `thirdparty/lmxxf-nr` is the part of lmxxf's neural rendering source the game builds
-  (`LmxxfNrRuntime.dll`, from `DAORecomp/neural/lmxxf_runtime.cpp`) and the installer
-  compiles (`installer/neural.py`, its HIP kernels by `thirdparty/lmxxf-nr/hip/build-modules.ps1`'s recipe):
-  copied from a checkout by `scripts/vendor_lmxxf.py`, which records the commit in
-  `SOURCE`. Never the network's weights.
 - `scripts/build_setup_exe.py` builds `dist/DAORecomp.exe`, what players download: the
   launcher alone (`-DDAO_LAUNCHER_ONLY=ON`) with the installer appended to it, which it
   unpacks to run. The installer is `scripts/build_installer_engine.py`'s folder:
@@ -431,6 +455,10 @@ are tested, and the traps found so far. The build details are below.
   (`DAORecomp/ui/menu_movies.cpp`) and serves the results from `userdata/generated/`.
 - `scripts/check_include_case.py` finds `#include`s whose case differs from the file on
   disk, which only breaks builds on Linux.
+- `scripts/find_texture_copies.py <game folder>` writes `DAORecomp/gpu/texture_copies.inc`,
+  the game's textures that are copies of another's picture (for texture packs), by
+  comparing the base game's `.xds` pictures. It needs the game's files, NumPy and Pillow,
+  so CI doesn't run it: run it again after changing how it compares.
 - `DAO_CONSOLE=1` shows the log (`userdata/dao.log`) as it's written, in the console
   the game was started from or a new one. The game has no console of its own, but
   output redirected to a file or a pipe gets the log without this. Closing a console it
@@ -442,10 +470,12 @@ are tested, and the traps found so far. The build details are below.
     memory it faulted on (Direct3D 12 DRED).
   - `DAO_LAUNCHER_SCREENSHOTS=<folder>`: saves each launcher view (the title screen,
     the four Configure tabs, Mods: its list, even before the first-open notice was
-    read, Save Backups, Downloadable Content) as `launcher_0.bmp` to `launcher_7.bmp`, and
-    the Update page as `launcher_8.bmp` when the update check finds a release, then quits.
+    read, Texture Packs, Save Backups, Downloadable Content) as `launcher_0.bmp` to
+    `launcher_8.bmp`, and the Update page as `launcher_9.bmp` when the update check finds
+    a release, then quits.
   - `DAO_LAUNCHER_DROP=<path>|<path>...`: with `DAO_LAUNCHER_SCREENSHOTS`, adds those
-    as if dropped on the window (tests adding mods and installing packages).
+    as if dropped on the window (tests adding mods and installing packages, and in setup
+    its disc image and DLC fields).
   - `DAO_LAUNCHER_PAD=<steps>`: with `DAO_LAUNCHER_SCREENSHOTS`, a virtual DualSense
     follows these steps (separated by spaces), 12 frames each, instead of the views'
     screenshots, then quits: a button pressed (`a b x y lb rb start up down left right`)
@@ -476,14 +506,11 @@ MIT (see `LICENSE`), except `xenia/`, which is Xenia's code under its BSD licens
 (`xenia/LICENSE`). The downloaded dependencies keep their own licenses; the FidelityFX
 license is copied next to its DLLs, and Intel's XeSS license and third-party notices
 next to `libxess.dll` (`intel_xess_license.txt`, `intel_xess_third_party_programs.txt`).
-`thirdparty/lmxxf-nr` is lmxxf's code under the MIT license, with AMD's HIP API headers
-under theirs (MIT); both licenses are installed next to `LmxxfNrRuntime.dll`
-(`lmxxf_nr_license.txt`, `lmxxf_nr_hip_api_license.txt`). `thirdparty/antilag2` is
+`thirdparty/antilag2` is
 AMD's Anti-Lag 2 SDK header, under its MIT license (installed as
 `amd_antilag2_license.txt`). NVIDIA's Streamline (MIT) and its Reflex and DLSS DLLs
 (under NVIDIA's license terms) are downloaded by the installer, and their licenses
 installed next to them (`nvidia_streamline_license.txt`, `nvidia_reflex_license.txt`,
-`nvidia_dlss_license.txt`). The neural rendering network's
-weights are NVIDIA's; none of them are in this repository or the releases.
+`nvidia_dlss_license.txt`).
 *Dragon Age* is a trademark of Electronic Arts; this project is not affiliated with EA,
 BioWare or Microsoft.

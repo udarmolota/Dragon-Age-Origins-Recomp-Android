@@ -102,7 +102,7 @@ namespace dao
         const Settings defaults;
         for (auto [value, fallback] : { std::pair{ &s.sharpness, defaults.sharpness },
                  { &s.temporalSharpness, defaults.temporalSharpness }, { &s.hdrPaperWhite, defaults.hdrPaperWhite },
-                 { &s.hdrPeak, defaults.hdrPeak }, { &s.neuralStrength, defaults.neuralStrength } })
+                 { &s.hdrPeak, defaults.hdrPeak } })
         {
             if (!std::isfinite(*value))
                 *value = fallback;
@@ -110,13 +110,12 @@ namespace dao
         s.resolutionScale = std::clamp(s.resolutionScale, 1, kMaxResolutionScale);
         s.sharpness = std::clamp(s.sharpness, 0.0f, 2.0f);
         s.temporalSharpness = std::clamp(s.temporalSharpness, 0.0f, 1.0f);
-        s.neuralStrength = std::clamp(s.neuralStrength, 0.0f, 1.0f);
-        if (std::ranges::find(kNeuralNetworks, s.neuralNetwork) == std::end(kNeuralNetworks))
-            s.neuralNetwork = 0;
-        s.neuralPasses = std::clamp(s.neuralPasses, 1, kMaxNeuralPasses);
-        s.neuralStyle = std::clamp(s.neuralStyle, 0, kMaxNeuralStyle);
         if (std::ranges::find(kAnisotropicLevels, s.anisotropicFiltering) == std::end(kAnisotropicLevels))
             s.anisotropicFiltering = 0;
+        if (std::ranges::find(kTexturePackMaxSizes, s.texturePackMaxSize) == std::end(kTexturePackMaxSizes))
+            s.texturePackMaxSize = 0;
+        // (Up to 1 TB: far beyond any card, and << 20 to bytes stays in range.)
+        s.texturePackMemory = std::clamp(s.texturePackMemory, 0, 1 << 20);
         if (std::ranges::find(kFrameRates, s.frameRate) == std::end(kFrameRates))
             s.frameRate = defaults.frameRate;
         s.hdrPaperWhite = std::clamp(s.hdrPaperWhite, kHdrMinNits, kHdrMaxPaperWhite);
@@ -223,14 +222,6 @@ namespace dao
                                                : TemporalUpscaler::Auto;
         s.temporalSharpness = video["temporal_sharpness"].value_or(s.temporalSharpness);
         s.frameGeneration = video["frame_generation"].value_or(s.frameGeneration);
-        s.neuralRendering = video["neural_rendering"].value_or(s.neuralRendering);
-        s.neuralWeights = video["neural_weights"].value_or(s.neuralWeights);
-        s.neuralStrength = video["neural_strength"].value_or(s.neuralStrength);
-        s.neuralNetwork = video["neural_network"].value_or(s.neuralNetwork);
-        s.neuralPasses = video["neural_passes"].value_or(s.neuralPasses);
-        s.neuralSkinProtect = video["neural_skin_protect"].value_or(s.neuralSkinProtect);
-        s.neuralStyle = video["neural_style"].value_or(s.neuralStyle);
-        s.neuralFrameRateGuard = video["neural_frame_rate_guard"].value_or(s.neuralFrameRateGuard);
         s.vsync = video["vsync"].value_or(s.vsync);
         const std::string lowLatency = video["low_latency"].value_or(std::string());
         for (int level = 0; level <= kMaxLowLatency; ++level)
@@ -253,6 +244,9 @@ namespace dao
         s.depthOfField = video["depth_of_field"].value_or(s.depthOfField);
         s.fov = video["fov"].value_or(s.fov);
         s.conversationFov = video["conversation_fov"].value_or(s.conversationFov);
+        s.texturePacks = video["texture_packs"].value_or(s.texturePacks);
+        s.texturePackMaxSize = video["texture_pack_max_size"].value_or(s.texturePackMaxSize);
+        s.texturePackMemory = video["texture_pack_memory"].value_or(s.texturePackMemory);
         s.hdr = video["hdr"].value_or(s.hdr);
         s.hdrPaperWhite = video["hdr_paper_white"].value_or(s.hdrPaperWhite);
         s.hdrPeak = video["hdr_peak"].value_or(s.hdrPeak);
@@ -335,28 +329,6 @@ temporal_sharpness = {}
 # frame_rate at half the display's refresh rate (60 fps on a 120 Hz display): when the
 # display can't show twice the frame rate, only the real frames are shown.
 frame_generation = {}
-# Neural rendering (lmxxf's HIP port of DLSS 5's neural rendering): the 3D scenes run
-# through NVIDIA's neural rendering network before temporal upscaling. AMD RDNA 4
-# (RX 9000 series) with a current AMD driver and temporal upscaling, in SDR or HDR; on an
-# RX 9070 XT it costs about 9.5 ms a frame at 1080 lines, 7 ms at 900. The network's
-# weights don't come with the game:
-# neural_weights is the folder with them (block0-ffn.f16) in lmxxf's package.
-# Strength 0..1 (0 skips the network). The options of lmxxf's packages: neural_network is
-# the network's size, 0 (Auto: 720 lines at resolution_scale 1, 1080 above), 1080, 900 or
-# 720 (smaller is faster; the scenes are fitted to it); neural_passes runs it 1 to 3 times
-# a frame (a stronger look; each pass costs as much as the first), and with more than one
-# neural_skin_protect keeps skin as the first pass made it; neural_style is one of
-# NVIDIA's three styles, 0 (NVIDIA's default), 1 (lmxxf's default) or 2.
-# neural_frame_rate_guard holds the frame rate: the network fades out while the GPU can't
-# hold frame_rate with it, and back in when there's room for it again (not at frame_rate 0).
-neural_rendering = {}
-neural_weights = {}
-neural_strength = {}
-neural_network = {}
-neural_passes = {}
-neural_skin_protect = {}
-neural_style = {}
-neural_frame_rate_guard = {}
 # Wait for the display's refresh when presenting: no tearing, and no more frames shown
 # than the display refreshes.
 vsync = {}
@@ -397,6 +369,14 @@ depth_of_field = {}
 # in gameplay, and in conversations and cutscenes (scaling each shot's own).
 fov = {}
 conversation_fov = {}
+# Texture packs: PC .dds textures in the "texture packs" folder next to the game folder (in
+# any folders inside it) replace the game's of the same name, on the graphics card only.
+# texture_pack_max_size leaves out larger sizes (0 for none, or 1024, 2048, 4096, 8192), and
+# texture_pack_memory is the graphics memory they may take in MB (0: half the card's own, at
+# least 256 MB).
+texture_packs = {}
+texture_pack_max_size = {}
+texture_pack_memory = {}
 fullscreen = {}
 window_width = {}
 window_height = {}
@@ -408,11 +388,11 @@ window_height = {}
             s.updateChannelChosen ? fmt::format("update_channel = \"{}\"", UpdateChannelName(s.updateChannel))
                                   : std::string("# update_channel = \"release\""),
             s.modsWarningSeen, LanguageName(s.language), s.resolutionScale, UpscalerName(s.upscaler), s.sharpness,
-            TemporalUpscalerName(s.temporalUpscaler), s.temporalSharpness, s.frameGeneration, s.neuralRendering,
-            Quote(s.neuralWeights), s.neuralStrength, s.neuralNetwork, s.neuralPasses, s.neuralSkinProtect,
-            s.neuralStyle, s.neuralFrameRateGuard, s.vsync, LowLatencyName(s.lowLatency), s.frameRate,
+            TemporalUpscalerName(s.temporalUpscaler), s.temporalSharpness, s.frameGeneration,
+            s.vsync, LowLatencyName(s.lowLatency), s.frameRate,
             s.hdr, s.hdrPaperWhite, s.hdrPeak, HdrQualityName(s.hdrHighQuality), s.anisotropicFiltering, s.shadows, s.postProcessing,
-            MotionBlurName(s.motionBlur), s.depthOfField, s.fov, s.conversationFov, s.fullscreen,
+            MotionBlurName(s.motionBlur), s.depthOfField, s.fov, s.conversationFov, s.texturePacks,
+            s.texturePackMaxSize, s.texturePackMemory, s.fullscreen,
             s.windowWidth, s.windowHeight);
         for (const auto& [id, enabled] : s.patches)
         {
@@ -462,15 +442,6 @@ window_height = {}
         SetXeniaCvar("dao_temporal_upscaler", toml::value<std::string>(std::string(TemporalUpscalerName(s.temporalUpscaler))));
         SetXeniaCvar("dao_temporal_sharpness", toml::value<double>(s.temporalSharpness));
         SetXeniaCvar("dao_frame_generation", toml::value<bool>(s.frameGeneration));
-        SetXeniaCvar("dao_neural_rendering", toml::value<bool>(NeuralRenderingOn(s)));
-        SetXeniaCvar("dao_neural_weights", toml::value<std::string>(s.neuralWeights));
-        SetXeniaCvar("dao_neural_strength", toml::value<double>(s.neuralStrength));
-        SetXeniaCvar("dao_neural_network",
-            toml::value<std::string>(s.neuralNetwork ? std::to_string(s.neuralNetwork) : "auto"));
-        SetXeniaCvar("dao_neural_passes", toml::value<int64_t>(s.neuralPasses));
-        SetXeniaCvar("dao_neural_skin_protect", toml::value<bool>(s.neuralSkinProtect));
-        SetXeniaCvar("dao_neural_style", toml::value<int64_t>(s.neuralStyle));
-        SetXeniaCvar("dao_neural_frame_rate_guard", toml::value<bool>(s.neuralFrameRateGuard));
         // (Not Xenia's own vsync cvar: the guest's vblanks stay at the console's 60 Hz.)
         SetXeniaCvar("dao_present_vsync", toml::value<bool>(s.vsync));
         SetXeniaCvar("dao_low_latency", toml::value<int64_t>(s.lowLatency));
@@ -504,26 +475,22 @@ window_height = {}
             LOGI("Settings: language {}", LanguageName(s.language));
         if (s.frameGeneration)
             LOGI("Settings: frame generation");
-        if (NeuralRenderingOn(s))
-            LOGI("Settings: neural rendering, strength {}, network {}, {} pass(es){}, style {}{}, weights in {}",
-                s.neuralStrength, s.neuralNetwork ? std::to_string(s.neuralNetwork) : "auto", s.neuralPasses,
-                s.neuralSkinProtect ? " (skin protected)" : "", s.neuralStyle,
-                s.neuralFrameRateGuard ? ", frame rate guard" : "", s.neuralWeights);
         if (s.motionBlur)
             LOGI("Settings: motion blur {}", MotionBlurName(s.motionBlur));
         if (s.lowLatency)
             LOGI("Settings: low latency {}", LowLatencyName(s.lowLatency));
         if (s.fov != kOriginalFov || s.conversationFov != kOriginalFov)
             LOGI("Settings: field of view {}, in conversations {}", s.fov, s.conversationFov);
+        if (!s.texturePacks)
+            LOGI("Settings: texture packs off");
+        else if (s.texturePackMaxSize || s.texturePackMemory)
+            LOGI("Settings: texture packs: size limit {}, memory {}",
+                s.texturePackMaxSize ? std::to_string(s.texturePackMaxSize) : "none",
+                s.texturePackMemory ? fmt::format("{} MB", s.texturePackMemory) : "automatic");
         if (s.hdr)
             LOGI("Settings: HDR output, paper white {} nits, peak {} nits, quality {}", s.hdrPaperWhite, s.hdrPeak,
                 HdrQualityName(s.hdrHighQuality));
         return s;
-    }
-
-    bool NeuralRenderingOn(const Settings& s)
-    {
-        return s.neuralRendering && !s.neuralWeights.empty() && s.temporalUpscaler != TemporalUpscaler::Off;
     }
 
     const Settings& GetSettings()

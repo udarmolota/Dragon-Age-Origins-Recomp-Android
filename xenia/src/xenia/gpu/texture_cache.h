@@ -23,6 +23,7 @@
 #include "xenia/base/hash.h"
 #include "xenia/base/math.h"
 #include "xenia/base/mutex.h"
+#include "xenia/gpu/dao_texture_pack.h"
 #include "xenia/gpu/register_file.h"
 #include "xenia/gpu/shared_memory.h"
 #include "xenia/gpu/texture_util.h"
@@ -706,6 +707,26 @@ class TextureCache {
   // DAO: whether every page of the range holds scaled resolve data.
   bool DaoIsRangeAllScaledResolved(uint32_t start_unscaled,
                                    uint32_t length_unscaled);
+  // DAO texture packs: the pack's entry for the texture (from its guest
+  // memory as it is now), or null if the pack doesn't replace it.
+  const dao_texture_pack::Index::Entry* DaoTextureEntry(
+      const Texture& texture, const dao_texture_pack::Index& index) const;
+  // DAO texture packs: a 2D texture of one slice, not a scaled resolve.
+  static bool DaoIsPlain2D(const TextureKey& key);
+  // DAO texture packs: the texture with this key, if it exists.
+  Texture* DaoFindTexture(const TextureKey& key) const;
+  // DAO texture packs: calls `function(Texture&)` for every texture.
+  template <typename Function>
+  void DaoForEachTexture(Function&& function) const {
+    for (const auto& texture_pair : textures_) {
+      function(*texture_pair.second);
+    }
+  }
+  // DAO texture packs: the time of the current submission, in milliseconds
+  // (what last_usage_time() is in).
+  uint64_t DaoCurrentTime() const { return current_submission_time_; }
+  // DAO: with dao_texture_log, logs a loaded texture's identity (texture packs).
+  void DaoLogTextureLoad(const Texture& texture) const;
 
   // For a texture whose outdated data the implementation has written itself.
   bool MakeUpToDateAndWatch(Texture& texture) {

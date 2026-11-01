@@ -296,7 +296,12 @@ namespace dao::launcher
             if (!fs::is_regular_file(gameRoot / kArtArchive, ec) && fs::is_regular_file(SetupArtRoot() / kArtArchive, ec))
                 st.gameRoot = SetupArtRoot();
             st.installDest = Utf8(mode.dest);
-            st.installIso = Utf8(mode.iso);
+            // (The game's disc, or the Ultimate Edition's second one: sorted as a drop is.)
+            if (!mode.iso.empty())
+            {
+                st.dropped = { mode.iso };
+                TakeDroppedInstallFiles(st);
+            }
             // An update keeps the shortcuts there are (or the player removed).
             st.installShortcuts = !HasGameFiles(st);
             st.installSteam = !HasGameFiles(st);
@@ -321,12 +326,16 @@ namespace dao::launcher
         if (const char* dir = getenv("DAO_LAUNCHER_SCREENSHOTS"))
         {
             st.screenshotDir = dir;
-            // A drop to test adding mods and installing packages with: paths separated by |.
+            // A drop to test adding mods and installing packages (or setup's fields) with:
+            // paths separated by |.
             if (const wchar_t* drop = _wgetenv(L"DAO_LAUNCHER_DROP"))
             {
                 for (const auto part : std::views::split(std::wstring_view(drop), L'|'))
                     st.dropped.push_back(std::wstring_view(part.begin(), part.end()));
-                AddDroppedMods(st);
+                if (st.setupOnly)
+                    TakeDroppedInstallFiles(st);
+                else
+                    AddDroppedMods(st);
             }
         }
         // (Setup may have no art until a disc image is chosen.)
@@ -339,11 +348,12 @@ namespace dao::launcher
             st.updater->Check(st.settings.updateChannel);
 
         // Screenshot mode: kFramesPerShot frames per shot (main, the configure tabs,
-        // mods, save backups, DLC, and the update's page if the check finds one), captured
-        // on the last one, after the view has faded in.
+        // mods, texture packs, save backups, DLC, and the update's page if the check
+        // finds one), captured on the last one, after the view has faded in.
         constexpr int kFramesPerShot = 20;
         constexpr int kModsShot = 1 + kConfigureTabs;
-        constexpr int kSavesShot = kModsShot + 1;
+        constexpr int kPacksShot = kModsShot + 1;
+        constexpr int kSavesShot = kPacksShot + 1;
         constexpr int kDlcShot = kSavesShot + 1;
         constexpr int kUpdateShot = kDlcShot + 1;
         // While minimized or in the background: at most this often, to save power.
@@ -408,11 +418,11 @@ namespace dao::launcher
             const int shot = st.screenshotDir.empty() || st.padScript ? -1 : st.screenshotFrame / kFramesPerShot;
             const bool shotStart = shot >= 0 && st.screenshotFrame % kFramesPerShot == 0;
             const bool shotNow = shot >= 0 && st.screenshotFrame % kFramesPerShot == kFramesPerShot - 1;
-            // The mods page waits for mods being added, DLC for its reading, the update's
-            // page for the check.
+            // The mods page waits for mods being added, texture packs for their check,
+            // DLC for its reading, the update's page for the check.
             const bool updateShot = shot == kUpdateShot;
             const bool shotWaits = (shot == kModsShot && (ReadingMods(st) || AddingMods(st))) ||
-                (shot == kDlcShot && ReadingDlc(st)) ||
+                (shot == kPacksShot && CheckingTexturePacks(st)) || (shot == kDlcShot && ReadingDlc(st)) ||
                 (updateShot && st.updater->GetState() == Updater::State::Checking) ||
                 (st.setupOnly && (st.isoArt.valid() || st.installer.GetState() == InstallRunner::State::Running));
             // (The update's page only when there's an update.)
@@ -428,6 +438,7 @@ namespace dao::launcher
             {
                 SetView(st, shot == 0 ? View::Main
                         : shot == kModsShot ? View::Mods
+                        : shot == kPacksShot ? View::TexturePacks
                         : shot == kSavesShot ? View::Saves
                         : shot == kDlcShot ? View::Dlc
                         : updateShot ? View::Update
@@ -462,6 +473,9 @@ namespace dao::launcher
                 break;
             case View::Mods:
                 ModsView(st, layout);
+                break;
+            case View::TexturePacks:
+                TexturePacksView(st, layout);
                 break;
             case View::Saves:
                 SavesView(st, layout);
@@ -512,6 +526,12 @@ namespace dao::launcher
             frameStart = SDL_GetTicksNS();
         }
 
+        // A texture pack check still running: stopped.
+        if (st.packCheck.valid())
+        {
+            st.packStop.request_stop();
+            st.packCheck.wait();
+        }
         // Mods still being read, added or converted: stopped (what's done is kept).
         if (ModsBusy(st) || ReadingMods(st))
         {

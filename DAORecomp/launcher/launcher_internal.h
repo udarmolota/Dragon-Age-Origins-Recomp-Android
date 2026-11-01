@@ -2,8 +2,9 @@
 // The launcher's parts (see launcher.h), shared by its files: launcher.cpp has
 // the command line, the window and its frame loop, widgets.cpp the helpers the
 // views draw with, and the views a file each (title_screen.cpp, configure_view.cpp,
-// mods_view.cpp, saves_view.cpp, dlc_view.cpp, update_view.cpp, install_view.cpp,
-// and add_to_steam.cpp's popup); gamepad.cpp feeds the gamepads to ImGui.
+// mods_view.cpp, texture_packs_view.cpp, saves_view.cpp, dlc_view.cpp,
+// update_view.cpp, install_view.cpp, and add_to_steam.cpp's popup); gamepad.cpp
+// feeds the gamepads to ImGui.
 
 // (Every part had these when the launcher was one file.)
 #include <future>
@@ -14,6 +15,7 @@
 
 #include "content/installed.h"
 #include "content/save_backups.h"
+#include "gpu/texture_pack.h"
 #include "launcher/install_runner.h"
 #include "launcher/steam.h"
 #include "launcher/updater.h"
@@ -86,7 +88,7 @@ namespace dao::launcher
     // Button hints: the icon's height, the gap to the label, the label's size.
     constexpr float kHintIcon = 30.0f, kHintGap = 8.0f, kHintTextSize = 19.0f;
 
-    enum class View { Main, Configure, Mods, Saves, Dlc, Update, Install };
+    enum class View { Main, Configure, Mods, TexturePacks, Saves, Dlc, Update, Install };
     // Graphics, Display, Patches, Advanced.
     constexpr int kConfigureTabs = 4;
 
@@ -194,14 +196,12 @@ namespace dao::launcher
         int shots = 0;
     };
 
-    // The paths chosen with Browse: the Install view's, and neural rendering's
-    // weights (Configure).
+    // The paths chosen with Browse: the Install view's.
     enum class PathField
     {
         DiscImage,
-        TitleUpdate,
+        Dlc,
         Folder,
-        NeuralWeights,
     };
 
     // What file and folder dialogs chose, from SDL's dialog thread; shared with
@@ -241,6 +241,13 @@ namespace dao::launcher
         bool modsRead = false;
         // config.toml couldn't be parsed: it isn't saved over (defaults are shown).
         bool settingsUnreadable = false;
+        // Texture Packs: the check running in the background
+        // (stopped with packStop), whether to check again after it, and the last
+        // one's results.
+        std::future<gpu::TexturePackReport> packCheck;
+        std::stop_source packStop;
+        bool packCheckAgain = false;
+        std::optional<gpu::TexturePackReport> packReport;
         // The game's file names, for the mods' warnings: read once (with the mod
         // list), shared with the background work.
         std::shared_ptr<const mods::GameFiles> gameFiles;
@@ -283,8 +290,10 @@ namespace dao::launcher
         bool setupOnly = false;
         SDL_Window* window = nullptr;
         // The Install view's choices (UTF-8 paths), and the installer.
-        std::string installIso, installUpdate, installDest;
+        std::string installIso, installDlc, installDest;
         bool installAccept = false;
+        // Ticked in the popup shown when installing without DLC.
+        bool installUnderstood = false;
         bool installShortcuts = true;
         std::string installStartError;
         InstallRunner installer;
@@ -322,19 +331,6 @@ namespace dao::launcher
         float padScroll = 0.0f, padScrollCarry = 0.0f;
         // Configure: give the selected tab the focus (switched with LB or RB).
         bool focusConfigureTab = false;
-        // Neural rendering: whether the install has its runtime and kernels (checked
-        // once), and whether settings.neuralWeights has the weights, as of checkedWeights
-        // (weightsCheck: the check of a later path, on its own thread).
-        std::optional<bool> neuralInstalled;
-        std::string checkedWeights;
-        bool weightsFound = false;
-        struct WeightsCheck
-        {
-            std::string path;
-            bool found = false;
-            std::atomic<bool> done = false;
-        };
-        std::shared_ptr<WeightsCheck> weightsCheck;
         // Whether Escape and the gamepad's B mean Back this frame: not closing a popup,
         // ending an edit or leaving a child window navigated on its own (not
         // NavFlattened, as the views' contents and their tables are).
@@ -423,6 +419,24 @@ namespace dao::launcher
     void PanelFrame(State& st, const Layout& layout, const char* title, Restore restore);
     void ShowContents(State& st, const Layout& layout, float left, Contents contents, bool resetScroll = false);
 
+    // A setting as the game's menus show it: the name above the picker or slider,
+    // which `widget` adds as "##value", returning whether it changed.
+    template <typename Widget>
+    bool Row(const char* label, Widget&& widget)
+    {
+        Label(label);
+        ImGui::PushID(label);
+        ImGui::SetNextItemWidth(RowWidth());
+        const bool changed = widget();
+        ImGui::PopID();
+        return changed;
+    }
+
+    inline bool ComboRow(const char* label, int* value, const char* const* items, int count)
+    {
+        return Row(label, [&] { return ImGui::Combo("##value", value, items, count); });
+    }
+
     // title_screen.cpp: the title screen and its menu, and loading the game's art
     // (for every view).
     void DrawScene(ImDrawList* draw, const State& st, const Layout& layout, float dim, double t);
@@ -433,11 +447,6 @@ namespace dao::launcher
 
     // configure_view.cpp: Configure, its tabs.
     void ConfigureView(State& st, const Layout& layout);
-    // The first of neural rendering's weights, which marks their folder.
-    constexpr const char* kNeuralWeightsFile = "block0-ffn.f16";
-    // The folder with them in `folder` or below (a package's); also used by
-    // install_view.cpp's folder dialog (on its thread) when one is chosen.
-    std::optional<fs::path> FindNeuralWeights(const fs::path& folder);
 
     // mods_view.cpp: Mods, and adding, converting and reading mods in the background.
     bool AddingMods(const State& st);
@@ -450,6 +459,10 @@ namespace dao::launcher
     void FinishAddingMods(State& st);
     void FinishConverting(State& st);
     void ModsView(State& st, const Layout& layout);
+
+    // texture_packs_view.cpp: Texture Packs, their settings and which files are used.
+    bool CheckingTexturePacks(const State& st);
+    void TexturePacksView(State& st, const Layout& layout);
 
     // saves_view.cpp: Save Backups, putting back a save the game saved over.
     void SavesView(State& st, const Layout& layout);

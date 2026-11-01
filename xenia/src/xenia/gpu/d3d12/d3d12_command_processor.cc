@@ -9,7 +9,6 @@
 
 #include "xenia/gpu/d3d12/d3d12_command_processor.h"
 #include "xenia/dao_host.h"
-#include "xenia/gpu/d3d12/dao_frame_guard.h"
 #include "xenia/gpu/d3d12/dao_frame_trace.h"
 #include "xenia/gpu/d3d12/dao_gpu_timing.h"
 #include "xenia/gpu/d3d12/dao_upscale.h"
@@ -470,6 +469,25 @@ void D3D12CommandProcessor::ReleaseViewBindlessDescriptorImmediately(
     uint32_t descriptor_index) {
   assert_true(bindless_resources_used_);
   view_bindless_heap_free_.push_back(descriptor_index);
+}
+
+void D3D12CommandProcessor::DaoReleaseViewBindlessDescriptorLater(
+    uint32_t descriptor_index) {
+  assert_true(bindless_resources_used_);
+  view_bindless_one_use_descriptors_.emplace_back(descriptor_index,
+                                                  GetCurrentSubmission());
+}
+
+void D3D12CommandProcessor::DaoReleaseResourceLater(ID3D12Resource* resource) {
+  resource->AddRef();
+  resources_for_deletion_.emplace_back(GetCurrentSubmission(), resource);
+}
+
+void D3D12CommandProcessor::DaoInvalidateTextureBindings() {
+  cbuffer_binding_descriptor_indices_vertex_.up_to_date = false;
+  cbuffer_binding_descriptor_indices_pixel_.up_to_date = false;
+  bindful_textures_written_vertex_ = false;
+  bindful_textures_written_pixel_ = false;
 }
 
 bool D3D12CommandProcessor::RequestOneUseSingleViewDescriptors(
@@ -3914,8 +3932,6 @@ bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
     // end of the submission (when async pipeline creation requests are
     // fulfilled).
     deferred_command_list_.Reset();
-    // DAO: the frame rate guard's GPU time.
-    DaoFrameGuard::Get().SubmissionBegan(*this);
 
     // Resume the active query segment.
     OpenQuerySegment(false);
@@ -4057,12 +4073,6 @@ bool D3D12CommandProcessor::EndSubmission(bool is_swap) {
     primitive_processor_->EndFrame();
   }
 
-  // DAO: the frame rate guard's GPU time (with a submission open, its end
-  // marked after its last commands, the barriers).
-  if (!submission_open_) {
-    DaoFrameGuard::Get().SubmissionEnding(*this, false, is_closing_frame);
-  }
-
   if (submission_open_) {
     assert_false(scratch_buffer_used_);
 
@@ -4078,7 +4088,6 @@ bool D3D12CommandProcessor::EndSubmission(bool is_swap) {
     // Submit barriers now because resources with the queued barriers may be
     // destroyed between frames.
     SubmitBarriers();
-    DaoFrameGuard::Get().SubmissionEnding(*this, true, is_closing_frame);
 
     // TODO(Triang3l): Error checking.
 
