@@ -9,8 +9,12 @@
 
 #include "xenia/gpu/render_target_cache.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
+#include <string>
+#include <vector>
 
 #include "xenia/base/assert.h"
 #include "xenia/base/cvar.h"
@@ -213,9 +217,73 @@ DEFINE_bool(
     "only the unused stencil bits. May slightly increase overhead from keeping "
     "both host targets live and bound.",
     "GPU.Debug");
+DEFINE_string(
+    dao_overwrite_quad_vs, "",
+    "DAO: comma-separated ucode hashes (hex) of vertex shaders that draw a "
+    "rectangle over the whole render target. Such a draw with opaque color "
+    "writes and no depth or stencil replaces the target, so the ownership "
+    "transfer before it is skipped. Per game, empty is off. "
+    "DAO_GPU_FRAME_TRACE lists the shaders.",
+    "GPU");
 
 namespace xe {
 namespace gpu {
+
+namespace {
+
+bool DaoIsOverwriteQuadShader(uint64_t vertex_shader_hash) {
+  static const std::vector<uint64_t> hashes = [] {
+    std::vector<uint64_t> parsed;
+    const std::string& list = cvars::dao_overwrite_quad_vs;
+    size_t start = 0;
+    while (start < list.size()) {
+      size_t end = std::min(list.find(',', start), list.size());
+      parsed.push_back(
+          std::strtoull(list.substr(start, end - start).c_str(), nullptr, 16));
+      start = end + 1;
+    }
+    return parsed;
+  }();
+  return std::find(hashes.begin(), hashes.end(), vertex_shader_hash) !=
+         hashes.end();
+}
+
+// Whether every pixel of the bound color render targets is replaced, not read.
+bool DaoDrawOverwritesColor(const RegisterFile& regs,
+                            uint32_t normalized_color_mask,
+                            uint32_t depth_and_color_rts_used_bits,
+                            uint64_t vertex_shader_hash) {
+  // Color only: depth off (bit 0), at least one color target.
+  if ((depth_and_color_rts_used_bits & 1) || !depth_and_color_rts_used_bits ||
+      !DaoIsOverwriteQuadShader(vertex_shader_hash)) {
+    return false;
+  }
+  auto vgt_draw_initiator = regs.Get<reg::VGT_DRAW_INITIATOR>();
+  if (vgt_draw_initiator.prim_type != xenos::PrimitiveType::kRectangleList ||
+      vgt_draw_initiator.num_indices != 3) {
+    return false;
+  }
+  auto rb_colorcontrol = regs.Get<reg::RB_COLORCONTROL>();
+  if (rb_colorcontrol.alpha_test_enable ||
+      rb_colorcontrol.alpha_to_mask_enable) {
+    return false;
+  }
+  for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
+    if (!(depth_and_color_rts_used_bits & (uint32_t(2) << i))) {
+      continue;
+    }
+    // All channels written, blending One * source + Zero * destination.
+    if (((normalized_color_mask >> (4 * i)) & 0b1111) != 0b1111 ||
+        regs.Get<reg::RB_BLENDCONTROL>(
+                reg::RB_BLENDCONTROL::rt_register_indices[i])
+                .value != 0x00010001) {
+      return false;
+    }
+  }
+  return true;
+}
+
+}  // namespace
 
 void RenderTargetCache::GetPSIColorFormatInfo(
     xenos::ColorRenderTargetFormat format, uint32_t write_mask,
@@ -1173,13 +1241,21 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
   // draw with whatever contents currently are in the render target in this
   // case).
 
+  // DAO: nothing of the previous contents survives this draw.
+  bool overwrites_color =
+      !interlock_barrier_only && !window_offset_tiles &&
+      DaoDrawOverwritesColor(regs, normalized_color_mask,
+                             depth_and_color_rts_used_bits,
+                             vertex_shader.ucode_data_hash());
+
   for (uint32_t i = 0; i < edram_bases_sorted_count; ++i) {
     const std::pair<uint32_t, uint32_t>& rt_base_index = edram_bases_sorted[i];
     uint32_t rt_bit_index = rt_base_index.second;
     ChangeOwnership(
         rt_keys[rt_bit_index], rt_starts_tiles[i], rt_lengths_tiles[i],
-        interlock_barrier_only ? nullptr
-                               : &last_update_transfers_[rt_bit_index],
+        (interlock_barrier_only || overwrites_color)
+            ? nullptr
+            : &last_update_transfers_[rt_bit_index],
         nullptr, rts_keep_depth_bits[rt_bit_index]);
   }
 

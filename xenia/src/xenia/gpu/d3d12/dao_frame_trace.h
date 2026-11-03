@@ -128,6 +128,22 @@ inline uint32_t& DrawIndex() {
   return index;
 }
 
+// Where FT lines go when set (Android has no xenia.log to read), else Xenia's
+// log.
+using LineSink = void (*)(const char* line);
+inline LineSink& Sink() {
+  static LineSink sink = nullptr;
+  return sink;
+}
+
+inline void Emit(const std::string& line) {
+  if (Sink()) {
+    Sink()(line.c_str());
+  } else {
+    XELOGI("{}", line);
+  }
+}
+
 inline void LogDraw(const RegisterFile& regs, uint64_t vs_hash,
                     uint64_t ps_hash, uint32_t color_mask,
                     uint32_t ps_texture_mask, uint32_t vs_texture_mask,
@@ -144,6 +160,20 @@ inline void LogDraw(const RegisterFile& regs, uint64_t vs_hash,
   const auto surface = regs.Get<reg::RB_SURFACE_INFO>();
   line += fmt::format(" pitch {} msaa {}", surface.surface_pitch,
                       uint32_t(surface.msaa_samples));
+  // Whether a draw overwrites its whole render target: the raw window scissor,
+  // viewport (scale and offset, x and y, as floats' bits), written channels,
+  // blend of RT0 and RB_COLORCONTROL (alpha test).
+  line += fmt::format(
+      " | scissor {:08X} {:08X} vp {:08X} {:08X} {:08X} {:08X} mask {:04X} "
+      "blend {:08X} cc {:08X}",
+      regs.values[XE_GPU_REG_PA_SC_WINDOW_SCISSOR_TL],
+      regs.values[XE_GPU_REG_PA_SC_WINDOW_SCISSOR_BR],
+      regs.values[XE_GPU_REG_PA_CL_VPORT_XSCALE],
+      regs.values[XE_GPU_REG_PA_CL_VPORT_XOFFSET],
+      regs.values[XE_GPU_REG_PA_CL_VPORT_YSCALE],
+      regs.values[XE_GPU_REG_PA_CL_VPORT_YOFFSET], color_mask,
+      regs.values[XE_GPU_REG_RB_BLENDCONTROL0],
+      regs.Get<reg::RB_COLORCONTROL>().value);
   for (uint32_t i = 0; i < 4; ++i) {
     if (!((color_mask >> (i * 4)) & 0xF)) {
       continue;
@@ -189,7 +219,7 @@ inline void LogDraw(const RegisterFile& regs, uint64_t vs_hash,
           fetch.exp_adjust, uint32_t(fetch.sign_x));
     }
   }
-  XELOGI("{}", line);
+  Emit(line);
 }
 
 inline void LogResolve(const RegisterFile& regs) {
@@ -206,19 +236,20 @@ inline void LogResolve(const RegisterFile& regs) {
     src_base = info.color_base | (info.color_base_bit_11 << 11);
     src_format = xenos::GetColorRenderTargetFormatName(info.color_format);
   }
-  XELOGI(
+  Emit(fmt::format(
       "FT resolve {:4} src RT{} {} base {} -> fmt {} @{:08X} exp_bias {} "
-      "clear c{} d{}",
+      "clear c{} d{} swap {} endian {}",
       DrawIndex()++, control.copy_src_select, src_format, src_base,
       uint32_t(dest.copy_dest_format),
-      regs[XE_GPU_REG_RB_COPY_DEST_BASE], dest.copy_dest_exp_bias,
+      regs.values[XE_GPU_REG_RB_COPY_DEST_BASE], dest.copy_dest_exp_bias,
       uint32_t(control.color_clear_enable),
-      uint32_t(control.depth_clear_enable));
+      uint32_t(control.depth_clear_enable), uint32_t(dest.copy_dest_swap),
+      uint32_t(dest.copy_dest_endian)));
 }
 
 inline void OnSwap(uint32_t frontbuffer_ptr) {
   if (Active()) {
-    XELOGI("FT swap frontbuffer @{:08X}", frontbuffer_ptr);
+    Emit(fmt::format("FT swap frontbuffer @{:08X}", frontbuffer_ptr));
   }
   FrameStats& stats = CurrentStats();
   stats.swap = SwapCount();

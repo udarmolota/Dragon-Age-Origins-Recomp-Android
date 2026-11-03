@@ -49,8 +49,8 @@ entry_inputs_end_code_begin_compute_xe
                        max(pixel_index.x + i,
                            resolve_info.half_pixel_offset_fill_source.x));
     uint4_xe bytes = uint4_xe(
-        saturate(texel_fetch_2d_xe(xe_resolve_source,
-                                   int2_xe(source_x, source_y), 0)) *
+        saturate_xe(texel_fetch_2d_xe(xe_resolve_source,
+                                      int2_xe(source_x, source_y), 0)) *
             255.0f +
         0.5f);
     uint pixel =
