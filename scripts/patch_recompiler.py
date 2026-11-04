@@ -559,6 +559,31 @@ inline float PPCHalfToFloat(uint16_t h) noexcept
     return f;
 }'''
 
+# recompiler_config.cpp: XenonRecomp prefixes the config's folder to every path in it, so an
+# absolute path (the launcher's build recipe gives them, its game and work folders sharing no
+# root) fails. Each path is resolved once, right after it is read, and the folder is cleared:
+# a relative config gives the same files as before.
+CONFIG_ANCHOR = '''        switchTableFilePath = main["switch_table_file_path"].value_or<std::string>("");
+'''
+CONFIG_ADDITION = CONFIG_ANCHOR + '''
+        // (XDroid360) A config path is relative to the config's folder unless it is absolute.
+        // Resolved once here, so every later use (recompiler.cpp's loads, the patched-file
+        // write, the output folder, the switch table below) takes the path as is.
+        auto resolve = [&](std::string& path)
+        {
+            const bool absolute = !path.empty() &&
+                (path[0] == '/' || path[0] == '\\\\' || (path.size() > 1 && path[1] == ':'));
+            if (!path.empty() && !absolute)
+                path = directoryPath + path;
+        };
+        resolve(filePath);
+        resolve(patchFilePath);
+        resolve(patchedFilePath);
+        resolve(outDirectoryPath);
+        resolve(switchTableFilePath);
+        directoryPath.clear();
+'''
+
 
 def write_if_changed(path, text):
     """Writes text unless the file already has it (keeps the timestamp, so builds stay incremental)."""
@@ -611,9 +636,16 @@ def patch_disasm_text(s):
     return s.replace(DIALECT_OLD, DIALECT_NEW)
 
 
+def patch_config_text(s):
+    assert s.count(CONFIG_ANCHOR) == 1, 'recompiler_config anchor'
+    return s.replace(CONFIG_ANCHOR, CONFIG_ADDITION)
+
+
 def patch(path):
-    """Patches recompiler.cpp at path (and XenonUtils/ppc_context.h, thirdparty/disasm/ppc-dis.c)."""
+    """Patches recompiler.cpp at path (and recompiler_config.cpp, XenonUtils/ppc_context.h,
+    thirdparty/disasm/ppc-dis.c)."""
     patch_file(path, patch_recompiler_text, '// ---- DAO additions')
+    patch_file(os.path.join(os.path.dirname(path), 'recompiler_config.cpp'), patch_config_text, '(XDroid360)')
     patch_file(os.path.join(os.path.dirname(path), '..', 'XenonUtils', 'ppc_context.h'), patch_context_text,
                'PPCQueryTimebase')
     patch_file(os.path.join(os.path.dirname(path), '..', 'thirdparty', 'disasm', 'ppc-dis.c'), patch_disasm_text,
