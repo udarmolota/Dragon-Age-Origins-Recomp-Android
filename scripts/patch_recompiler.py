@@ -645,7 +645,8 @@ def patch(path):
     """Patches recompiler.cpp at path (and recompiler_config.cpp, XenonUtils/ppc_context.h,
     thirdparty/disasm/ppc-dis.c)."""
     patch_file(path, patch_recompiler_text, '// ---- DAO additions')
-    patch_file(os.path.join(os.path.dirname(path), 'recompiler_config.cpp'), patch_config_text, '(XDroid360)')
+    patch_file(os.path.join(os.path.dirname(path), 'recompiler_config.cpp'), patch_config_text,
+               '(XDroid360) A config path')
     patch_file(os.path.join(os.path.dirname(path), '..', 'XenonUtils', 'ppc_context.h'), patch_context_text,
                'PPCQueryTimebase')
     patch_file(os.path.join(os.path.dirname(path), '..', 'thirdparty', 'disasm', 'ppc-dis.c'), patch_disasm_text,
