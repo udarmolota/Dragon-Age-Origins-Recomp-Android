@@ -75,6 +75,8 @@ class DebugPrintLogSink final : public LogSink {
 // Must be called on startup.
 void InitializeLogging(const std::string_view app_name);
 void ShutdownLogging();
+// DAO: one more sink for what Xenia logs (the runtime copies its errors into the game's log).
+void AddLogSink(std::unique_ptr<LogSink> sink);
 void FlushLog();
 
 namespace logging {

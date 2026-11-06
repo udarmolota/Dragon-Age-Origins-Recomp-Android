@@ -465,6 +465,10 @@ void InitializeLogging(const std::string_view app_name) {
 #endif  // XE_PLATFORM_ANDROID
 }
 
+void AddLogSink(std::unique_ptr<LogSink> sink) {
+  if (logger_) logger_->AddLogSink(std::move(sink));
+}
+
 void ShutdownLogging() {
   Logger* logger = logger_;
   logger_ = nullptr;
